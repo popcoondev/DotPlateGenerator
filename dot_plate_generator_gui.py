@@ -92,7 +92,13 @@ class DotPlateApp(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Dot Plate Generator")
+        main_layout = QHBoxLayout()
+        self.setLayout(main_layout)
         self.layout = QVBoxLayout()
+        control_layout = QVBoxLayout()
+        self.mesh_view = QLabel("3D STL preview will appear here")
+        self.mesh_view.setAlignment(Qt.AlignCenter)
+        self.mesh_view.setFixedHeight(240)
         self.setLayout(self.layout)
 
         self.input_label = QLabel("No image selected")
@@ -127,11 +133,16 @@ class DotPlateApp(QWidget):
             self.param_grid.addWidget(spin, i, 1)
             self.controls[label] = spin
 
-        self.layout.addWidget(self.input_label)
-        self.layout.addWidget(self.select_button)
+        control_layout.addWidget(self.input_label)
+        control_layout.addWidget(self.select_button)
         self.layout.addWidget(self.preview_label)
-        self.layout.addLayout(self.param_grid)
-        self.layout.addWidget(self.export_button)
+        
+        control_layout.addLayout(self.param_grid)
+        self.layout.addWidget(self.mesh_view)
+        control_layout.addWidget(self.export_button)
+
+        main_layout.addLayout(self.layout)
+        main_layout.addLayout(control_layout)
 
         self.image_path = None
 
@@ -178,6 +189,22 @@ class DotPlateApp(QWidget):
                 int(params["Top Colors"]),
             )
             self.input_label.setText(f"Exported to {out_path}")
+            try:
+                mesh = trimesh.load(out_path)
+                fig = plt.figure(figsize=(4, 4))
+                ax = fig.add_subplot(111, projection='3d')
+                ax.view_init(elev=20, azim=45)
+                mesh.show(ax=ax)
+                ax.set_axis_off()
+                buf = BytesIO()
+                plt.savefig(buf, format='png')
+                plt.close(fig)
+                buf.seek(0)
+                qimg = QImage()
+                qimg.loadFromData(buf.getvalue())
+                self.mesh_view.setPixmap(QPixmap.fromImage(qimg))
+            except Exception as e:
+                self.mesh_view.setText(f"STL preview failed: {e}")
 
 # -------------------------------
 # 実行エントリポイント
