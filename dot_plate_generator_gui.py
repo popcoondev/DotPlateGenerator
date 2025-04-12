@@ -1,5 +1,5 @@
 # dot_plate_generator_gui.py
-# 必要ライブラリ: PyQt5, PIL, numpy, trimesh, shapely, skimage, scipy
+# 必要ライブラリ: PyQt5, PIL, numpy, trimesh, shapely, skimage, scipy, matplotlib
 
 import sys
 import numpy as np
@@ -10,22 +10,14 @@ import trimesh
 from trimesh.creation import box
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog,
-    QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout
+    QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap, QImage
 from shapely.geometry import Polygon
 from skimage import measure
-
-# -------------------------------
-# ユーザー指定の初期値（可変）
-# -------------------------------
-DOT_SIZE = 1.0
-WALL_THICKNESS = 0.2
-WALL_HEIGHT = 1.0
-BASE_HEIGHT = 2.0
-GRID_SIZE = 32
-COLOR_STEP = 8
-TOP_COLOR_LIMIT = 36
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 # -------------------------------
 # 補助関数
@@ -36,6 +28,19 @@ def normalize_colors(pixels, step):
 def map_to_closest_color(pixel, palette):
     return min(palette, key=lambda c: distance.euclidean(pixel, c))
 
+def generate_preview_image(image_path, grid_size, color_step, top_color_limit):
+    img = Image.open(image_path).convert("RGB")
+    img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
+    pixels = np.array(img_resized).reshape(-1, 3)
+    pixels_normalized = normalize_colors(pixels, color_step)
+    colors = [tuple(c) for c in pixels_normalized]
+    color_counts = Counter(colors)
+    top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
+    pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+    img_preview = Image.fromarray(np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3)), mode="RGB")
+    img_preview = img_preview.resize((grid_size * 10, grid_size * 10), resample=Image.NEAREST)
+    return img_preview
+
 # -------------------------------
 # モデル生成関数
 # -------------------------------
@@ -45,7 +50,6 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     img = Image.open(image_path).convert("RGB")
     img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
     pixels = np.array(img_resized).reshape(-1, 3)
-
     pixels_normalized = normalize_colors(pixels, color_step)
     colors = [tuple(c) for c in pixels_normalized]
     color_counts = Counter(colors)
@@ -53,7 +57,6 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
     pixels_rounded_np = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
     mask = np.array([[tuple(px) != (0, 0, 0) for px in row] for row in pixels_rounded_np]).astype(np.uint8)
-
     base_blocks = []
     wall_blocks = []
     for y in range(grid_size):
@@ -64,7 +67,6 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 block = box(extents=[dot_size, dot_size, base_height])
                 block.apply_translation([x0 + dot_size / 2, y0 + dot_size / 2, base_height / 2])
                 base_blocks.append(block)
-
                 wall_boxes = [
                     box(extents=[wall_thickness, dot_size, wall_height]),
                     box(extents=[wall_thickness, dot_size, wall_height]),
@@ -80,7 +82,6 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 for wbox, pos in zip(wall_boxes, positions):
                     wbox.apply_translation(pos)
                     wall_blocks.append(wbox)
-
     mesh = trimesh.util.concatenate(base_blocks + wall_blocks)
     mesh.export(output_path)
 
@@ -95,12 +96,16 @@ class DotPlateApp(QWidget):
         self.setLayout(self.layout)
 
         self.input_label = QLabel("No image selected")
+        self.preview_label = QLabel("Preview will appear here")
+        self.preview_label.setFixedHeight(320)
+        self.preview_label.setAlignment(Qt.AlignCenter)
+
         self.select_button = QPushButton("Select Image")
         self.select_button.clicked.connect(self.select_image)
+
         self.export_button = QPushButton("Export STL")
         self.export_button.clicked.connect(self.export_stl)
 
-        # スライダーとスピンボックスでパラメータ調整
         self.param_grid = QGridLayout()
         self.controls = {}
         for i, (label, default, minv, maxv) in enumerate([
@@ -113,17 +118,18 @@ class DotPlateApp(QWidget):
             ("Top Colors", 36, 1, 64)
         ]):
             label_widget = QLabel(label)
-            from PyQt5.QtWidgets import QDoubleSpinBox
             spin = QSpinBox() if isinstance(default, int) else QDoubleSpinBox()
             spin.setMinimum(minv)
             spin.setMaximum(maxv)
             spin.setValue(default)
+            spin.valueChanged.connect(self.update_preview)
             self.param_grid.addWidget(label_widget, i, 0)
             self.param_grid.addWidget(spin, i, 1)
             self.controls[label] = spin
 
         self.layout.addWidget(self.input_label)
         self.layout.addWidget(self.select_button)
+        self.layout.addWidget(self.preview_label)
         self.layout.addLayout(self.param_grid)
         self.layout.addWidget(self.export_button)
 
@@ -134,12 +140,29 @@ class DotPlateApp(QWidget):
         if path:
             self.image_path = path
             self.input_label.setText(path)
+            self.update_preview()
+
+    def update_preview(self):
+        if not self.image_path:
+            return
+        params = {key: spin.value() for key, spin in self.controls.items()}
+        img = generate_preview_image(
+            self.image_path,
+            int(params["Grid Size"]),
+            int(params["Color Step"]),
+            int(params["Top Colors"])
+        )
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        qimg = QImage()
+        qimg.loadFromData(buffer.getvalue())
+        pixmap = QPixmap.fromImage(qimg)
+        self.preview_label.setPixmap(pixmap)
 
     def export_stl(self):
         if not self.image_path:
             self.input_label.setText("No image selected")
             return
-
         out_path, _ = QFileDialog.getSaveFileName(self, "Save STL", "dot_plate.stl", "STL Files (*.stl)")
         if out_path:
             params = {key: spin.value() for key, spin in self.controls.items()}
