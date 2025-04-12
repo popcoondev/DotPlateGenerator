@@ -11,10 +11,11 @@ from trimesh.creation import box
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout, QDoubleSpinBox,
-    QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow
+    QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
+    QColorDialog
 )
 from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtGui import QPixmap, QImage, QColor
 from shapely.geometry import Polygon
 from skimage import measure
 import matplotlib.pyplot as plt
@@ -48,7 +49,9 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
 # -------------------------------
 def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                            wall_thickness, wall_height, base_height,
-                           color_step, top_color_limit, out_thickness=0.1, return_colors=False):
+                           color_step, top_color_limit, out_thickness=0.1, 
+                           wall_color=(255, 255, 255), # 壁の色（デフォルトは白）
+                           return_colors=False):
     img = Image.open(image_path).convert("RGB")
     img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
     pixels = np.array(img_resized).reshape(-1, 3)
@@ -153,7 +156,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 
                 for i, (wbox, pos) in enumerate(zip(wall_boxes, positions)):
                     wbox.apply_translation(pos)
-                    # 壁には独自の色情報を付けない（後で一律に白色にする）
+                    # 壁には独自の色情報を付けない（後で一律に指定色にする）
                     wall_blocks.append(wbox)
     
     # メッシュを作成
@@ -161,8 +164,10 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     
     # 色情報を設定
     if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'face_colors'):
-        # デフォルト色（白色）
-        mesh.visual.face_colors = np.ones((len(mesh.faces), 4), dtype=np.uint8) * 255
+        # デフォルト色（指定した壁の色）
+        r, g, b = wall_color
+        wall_color_array = np.array([r, g, b, 255], dtype=np.uint8)
+        mesh.visual.face_colors = np.ones((len(mesh.faces), 4), dtype=np.uint8) * wall_color_array
         
         # 各面がどのオブジェクトに属するかをマッピング
         face_index = 0
@@ -183,8 +188,8 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # 次のブロックの最初の面インデックス
                 face_index += num_faces
         
-        # 壁ブロックは白色のまま（デフォルト色）
-        face_index += sum(len(block.faces) for block in wall_blocks)
+        # 壁ブロックは指定色
+        # face_indexは既にベースブロックの終了位置に設定されているので、追加の処理は不要
     
     # STLファイルに保存
     mesh.export(output_path)
@@ -312,6 +317,21 @@ class DotPlateApp(QMainWindow):
         param_group = QGroupBox("パラメータ設定")
         param_layout = QVBoxLayout()
         
+        # 壁の色設定
+        wall_color_layout = QHBoxLayout()
+        wall_color_label = QLabel("壁の色:")
+        self.wall_color_button = QPushButton()
+        self.wall_color_button.setFixedSize(30, 30)
+        self.wall_color = QColor(255, 255, 255)  # デフォルトは白
+        self.set_button_color(self.wall_color_button, self.wall_color)
+        self.wall_color_button.clicked.connect(self.select_wall_color)
+        
+        wall_color_layout.addWidget(wall_color_label)
+        wall_color_layout.addWidget(self.wall_color_button)
+        wall_color_layout.addStretch()
+        
+        param_layout.addLayout(wall_color_layout)
+        
         self.param_grid = QGridLayout()
         self.controls = {}
         self.sliders = {}
@@ -403,6 +423,17 @@ class DotPlateApp(QMainWindow):
     def show_parameter_help(self, parameter_name):
         dialog = ParameterHelpDialog(parameter_name, self)
         dialog.exec_()
+        
+    def set_button_color(self, button, color):
+        """ボタンの背景色を設定する"""
+        button.setStyleSheet(f"background-color: rgb({color.red()}, {color.green()}, {color.blue()}); border: 1px solid black;")
+        
+    def select_wall_color(self):
+        """壁の色を選択するダイアログを表示"""
+        color = QColorDialog.getColor(self.wall_color, self, "壁の色を選択")
+        if color.isValid():
+            self.wall_color = color
+            self.set_button_color(self.wall_color_button, color)
     
     def select_image(self):
         path, _ = QFileDialog.getOpenFileName(self, "画像を開く", "", "画像ファイル (*.png *.jpg *.jpeg)")
@@ -449,6 +480,9 @@ class DotPlateApp(QMainWindow):
                 self.input_label.setText("カラーSTLファイルを生成中...")
                 QApplication.processEvents()  # UIを更新
                 
+                # 壁の色をRGBタプルに変換
+                wall_color = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
+                
                 # メッシュ生成（メッシュも返すように指定）
                 mesh = generate_dot_plate_stl(
                     self.image_path,
@@ -461,6 +495,7 @@ class DotPlateApp(QMainWindow):
                     int(params["Color Step"]),
                     int(params["Top Colors"]),
                     float(params["Out Thickness"]),
+                    wall_color=wall_color,  # 選択した壁の色を使用
                     return_colors=True  # メッシュを返すように指定
                 )
                 
@@ -475,7 +510,8 @@ class DotPlateApp(QMainWindow):
                 # STLプレビューを表示
                 self.show_stl_preview(preview_mesh)
                 
-                self.input_label.setText(f"{out_path} にカラーSTLをエクスポートしました")
+                color_name = f"RGB({self.wall_color.red()}, {self.wall_color.green()}, {self.wall_color.blue()})"
+                self.input_label.setText(f"{out_path} にカラーSTL（壁の色：{color_name}）をエクスポートしました")
                 
             except Exception as e:
                 print(f"STL生成エラー: {str(e)}")
