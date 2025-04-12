@@ -48,7 +48,7 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
 # -------------------------------
 def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                            wall_thickness, wall_height, base_height,
-                           color_step, top_color_limit, out_thickness=0.1):
+                           color_step, top_color_limit, out_thickness=0.1, return_colors=False):
     img = Image.open(image_path).convert("RGB")
     img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
     pixels = np.array(img_resized).reshape(-1, 3)
@@ -59,16 +59,33 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
     pixels_rounded_np = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
     mask = np.array([[tuple(px) != (0, 0, 0) for px in row] for row in pixels_rounded_np]).astype(np.uint8)
+    
     base_blocks = []
     wall_blocks = []
+    
+    # 色情報とジオメトリの対応を保存
+    color_mapping = {}
+    
     for y in range(grid_size):
         for x in range(grid_size):
             if mask[y, x]:
+                # 現在のピクセルの色を取得
+                pixel_color = tuple(pixels_rounded_np[y, x])
+                
                 x0 = x * dot_size - out_thickness
                 y0 = (grid_size - 1 - y) * dot_size - out_thickness
+                
                 # ベースブロックを外壁厚み分大きくする
                 block = box(extents=[dot_size + out_thickness * 2, dot_size + out_thickness * 2, base_height])
                 block.apply_translation([x0 + (dot_size + out_thickness * 2) / 2, y0 + (dot_size + out_thickness * 2) / 2, base_height / 2])
+                
+                # 色情報を追加
+                color_mapping[len(base_blocks)] = {
+                    'type': 'base', 
+                    'color': pixel_color, 
+                    'position': [x, y]
+                }
+                
                 base_blocks.append(block)
                 
                 # ドットの区切り壁とベースの輪郭壁を分けて処理
@@ -134,11 +151,73 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                     # 通常の下壁
                     positions.append([x0 + out_thickness + dot_size / 2, y0 + out_thickness + dot_size - wall_thickness / 2, base_height + wall_height / 2])
                 
-                for wbox, pos in zip(wall_boxes, positions):
+                for i, (wbox, pos) in enumerate(zip(wall_boxes, positions)):
                     wbox.apply_translation(pos)
+                    # 壁の色情報も追加（ベースと同じ色）
+                    color_mapping[len(base_blocks) + len(wall_blocks)] = {
+                        'type': 'wall', 
+                        'color': pixel_color,
+                        'position': [x, y], 
+                        'wall_index': i
+                    }
                     wall_blocks.append(wbox)
+    
+    # メッシュを作成
     mesh = trimesh.util.concatenate(base_blocks + wall_blocks)
+    
+    # 色情報を設定
+    if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'face_colors'):
+        mesh.visual.face_colors = np.ones((len(mesh.faces), 4), dtype=np.uint8) * 200  # デフォルト色（薄いグレー）
+        
+        # 各面がどのオブジェクトに属するかをマッピング
+        face_index = 0
+        
+        # ベースブロックの色を設定
+        for i, block in enumerate(base_blocks):
+            if i in color_mapping:
+                color_info = color_mapping[i]
+                r, g, b = color_info['color']
+                color = np.array([r, g, b, 255], dtype=np.uint8)
+                
+                # このブロックの面数
+                num_faces = len(block.faces)
+                
+                # 該当する面すべてに色を設定
+                mesh.visual.face_colors[face_index:face_index + num_faces] = color
+                
+                # 次のブロックの最初の面インデックス
+                face_index += num_faces
+        
+        # 壁ブロックはやや暗くする
+        for i, block in enumerate(wall_blocks):
+            idx = i + len(base_blocks)
+            if idx in color_mapping:
+                color_info = color_mapping[idx]
+                r, g, b = color_info['color']
+                
+                # 壁は少し暗くする
+                r = int(r * 0.7)
+                g = int(g * 0.7)
+                b = int(b * 0.7)
+                
+                color = np.array([r, g, b, 255], dtype=np.uint8)
+                
+                # このブロックの面数
+                num_faces = len(block.faces)
+                
+                # 該当する面すべてに色を設定
+                mesh.visual.face_colors[face_index:face_index + num_faces] = color
+                
+                # 次のブロックの最初の面インデックス
+                face_index += num_faces
+    
+    # STLファイルに保存
     mesh.export(output_path)
+    
+    # 色情報を返すかどうか
+    if return_colors:
+        return mesh, pixels_rounded_np
+    return mesh
 
 # -------------------------------
 # ヘルプダイアログクラス
@@ -179,7 +258,7 @@ class ParameterHelpDialog(QDialog):
 # STLプレビューダイアログ
 # -------------------------------
 class STLPreviewDialog(QDialog):
-    def __init__(self, stl_path, parent=None):
+    def __init__(self, stl_path, parent=None, mesh=None):
         super().__init__(parent)
         self.setWindowTitle("STLプレビュー")
         self.setMinimumSize(600, 600)
@@ -192,43 +271,101 @@ class STLPreviewDialog(QDialog):
         self.preview_label = QLabel("STLモデルの読み込み中...")
         self.preview_label.setAlignment(Qt.AlignCenter)
         
+        # 視点コントロール
+        view_group = QGroupBox("視点コントロール")
+        view_layout = QHBoxLayout()
+        
+        self.azim_slider = QSlider(Qt.Horizontal)
+        self.azim_slider.setMinimum(0)
+        self.azim_slider.setMaximum(360)
+        self.azim_slider.setValue(45)
+        self.azim_slider.setTickPosition(QSlider.TicksBelow)
+        self.azim_slider.setTickInterval(30)
+        self.azim_slider.valueChanged.connect(self.update_view)
+        
+        self.elev_slider = QSlider(Qt.Horizontal)
+        self.elev_slider.setMinimum(-90)
+        self.elev_slider.setMaximum(90)
+        self.elev_slider.setValue(20)
+        self.elev_slider.setTickPosition(QSlider.TicksBelow)
+        self.elev_slider.setTickInterval(15)
+        self.elev_slider.valueChanged.connect(self.update_view)
+        
+        view_layout.addWidget(QLabel("水平角度:"))
+        view_layout.addWidget(self.azim_slider)
+        view_layout.addWidget(QLabel("垂直角度:"))
+        view_layout.addWidget(self.elev_slider)
+        
+        view_group.setLayout(view_layout)
+        
         close_button = QPushButton("閉じる")
         close_button.clicked.connect(self.accept)
         
         layout.addWidget(self.preview_label)
+        layout.addWidget(view_group)
         layout.addWidget(close_button)
         
         self.setLayout(layout)
         
+        # メッシュがすでに提供されている場合は直接使用
+        self.mesh = mesh
+        self.stl_path = stl_path
+        
         # 別スレッドでSTLを読み込み
-        threading.Thread(target=self.load_stl_preview, args=(stl_path,)).start()
+        threading.Thread(target=self.load_stl_preview).start()
     
-    def load_stl_preview(self, stl_path):
-        try:
-            # メッシュファイルデータを読み込む（プロットしない）
-            mesh = trimesh.load(stl_path)
+    def update_view(self):
+        # メッシュがロードされていない場合は何もしない
+        if not hasattr(self, 'mesh') or self.mesh is None:
+            return
             
-            # ここではメッシュデータをメインスレッドに渡すだけ
-            from PyQt5.QtCore import QEvent
-            
-            class MeshLoadedEvent(QEvent):
-                def __init__(self, mesh):
-                    super().__init__(QEvent.Type(QEvent.User + 1))
-                    self.mesh = mesh
-            
-            # メインスレッドでのGUI更新を要求
-            QApplication.instance().postEvent(self, MeshLoadedEvent(mesh))
-            
-        except Exception as e:
-            # エラー表示もメインスレッドで
-            from PyQt5.QtCore import QEvent
-            
-            class ErrorEvent(QEvent):
-                def __init__(self, error_msg):
-                    super().__init__(QEvent.Type(QEvent.User + 2))
-                    self.error_msg = error_msg
-            
-            QApplication.instance().postEvent(self, ErrorEvent(str(e)))
+        # スライダーから値を取得
+        azim = self.azim_slider.value()
+        elev = self.elev_slider.value()
+        
+        # メインスレッドでのGUI更新を要求
+        from PyQt5.QtCore import QEvent
+        
+        class UpdateViewEvent(QEvent):
+            def __init__(self, mesh, azim, elev):
+                super().__init__(QEvent.Type(QEvent.User + 3))
+                self.mesh = mesh
+                self.azim = azim
+                self.elev = elev
+        
+        # メインスレッドでのGUI更新を要求
+        QApplication.instance().postEvent(self, UpdateViewEvent(self.mesh, azim, elev))
+    
+    def load_stl_preview(self):
+        if self.mesh is None:
+            try:
+                # メッシュファイルデータを読み込む（プロットしない）
+                self.mesh = trimesh.load(self.stl_path)
+                
+                # ここではメッシュデータをメインスレッドに渡すだけ
+                from PyQt5.QtCore import QEvent
+                
+                class MeshLoadedEvent(QEvent):
+                    def __init__(self, mesh):
+                        super().__init__(QEvent.Type(QEvent.User + 1))
+                        self.mesh = mesh
+                
+                # メインスレッドでのGUI更新を要求
+                QApplication.instance().postEvent(self, MeshLoadedEvent(self.mesh))
+                
+            except Exception as e:
+                # エラー表示もメインスレッドで
+                from PyQt5.QtCore import QEvent
+                
+                class ErrorEvent(QEvent):
+                    def __init__(self, error_msg):
+                        super().__init__(QEvent.Type(QEvent.User + 2))
+                        self.error_msg = error_msg
+                
+                QApplication.instance().postEvent(self, ErrorEvent(str(e)))
+        else:
+            # すでにメッシュがある場合は直接ビュー更新イベントを発行
+            self.update_view()
     
     def closeEvent(self, event):
         # ダイアログが閉じられるときの処理
@@ -243,22 +380,13 @@ class STLPreviewDialog(QDialog):
             # メインスレッドでMatplotlibを使ってメッシュを描画
             try:
                 print("STLメッシュ描画開始")
-                mesh = event.mesh
-                fig = plt.figure(figsize=(8, 8))
-                ax = fig.add_subplot(111, projection='3d')
-                ax.view_init(elev=20, azim=45)
-                mesh.show(ax=ax)
-                ax.set_axis_off()
-                plt.tight_layout()
-                buf = BytesIO()
-                plt.savefig(buf, format='png', dpi=100)
-                plt.close(fig)
-                buf.seek(0)
+                self.mesh = event.mesh
                 
-                qimg = QImage()
-                qimg.loadFromData(buf.getvalue())
-                pixmap = QPixmap.fromImage(qimg)
-                self.preview_label.setPixmap(pixmap)
+                # 初期ビューの描画
+                azim = self.azim_slider.value()
+                elev = self.elev_slider.value()
+                self.render_mesh(self.mesh, elev, azim)
+                
                 print("STLメッシュ描画完了")
             except Exception as e:
                 print(f"STLプレビュー描画エラー: {str(e)}")
@@ -267,8 +395,43 @@ class STLPreviewDialog(QDialog):
         elif event.type() == QEvent.User + 2:  # エラーイベント
             self.preview_label.setText(f"STLプレビュー失敗: {event.error_msg}")
             return True
+        elif event.type() == QEvent.User + 3:  # ビュー更新イベント
+            # ビューアングル変更時の描画更新
+            try:
+                mesh = event.mesh
+                azim = event.azim
+                elev = event.elev
+                self.render_mesh(mesh, elev, azim)
+            except Exception as e:
+                print(f"ビュー更新エラー: {str(e)}")
+            return True
             
         return super().event(event)
+        
+    def render_mesh(self, mesh, elev, azim):
+        """メッシュを指定のビューアングルで描画"""
+        try:
+            fig = plt.figure(figsize=(8, 8))
+            ax = fig.add_subplot(111, projection='3d')
+            ax.view_init(elev=elev, azim=azim)
+            
+            # メッシュを表示（色情報がある場合は色を付けて表示）
+            mesh.show(ax=ax)
+            
+            ax.set_axis_off()
+            plt.tight_layout()
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            plt.close(fig)
+            buf.seek(0)
+            
+            qimg = QImage()
+            qimg.loadFromData(buf.getvalue())
+            pixmap = QPixmap.fromImage(qimg)
+            self.preview_label.setPixmap(pixmap)
+        except Exception as e:
+            print(f"メッシュ描画エラー: {str(e)}")
+            self.preview_label.setText(f"メッシュ描画失敗: {str(e)}")
 
 # -------------------------------
 # GUI クラス
@@ -487,10 +650,11 @@ class DotPlateApp(QMainWindow):
             
             try:
                 # STLファイル生成（時間がかかる可能性がある）
-                self.input_label.setText("STLファイルを生成中...")
+                self.input_label.setText("カラーSTLファイルを生成中...")
                 QApplication.processEvents()  # UIを更新
                 
-                generate_dot_plate_stl(
+                # メッシュと色情報を取得
+                mesh = generate_dot_plate_stl(
                     self.image_path,
                     out_path,
                     int(params["Grid Size"]),
@@ -501,18 +665,29 @@ class DotPlateApp(QMainWindow):
                     int(params["Color Step"]),
                     int(params["Top Colors"]),
                     float(params["Out Thickness"]),
+                    return_colors=True  # メッシュを返すように指定
                 )
                 
-                self.input_label.setText(f"{out_path} にエクスポートしました")
+                self.input_label.setText(f"{out_path} にカラーSTLをエクスポートしました")
                 
                 # 別ウィンドウでプレビューを表示（モードレス）
-                preview_dialog = STLPreviewDialog(out_path, self)
+                # メッシュオブジェクトを直接渡す
+                if isinstance(mesh, tuple) and len(mesh) > 0:
+                    # return_colors=Trueの場合、最初の要素がメッシュ
+                    preview_mesh = mesh[0]
+                else:
+                    # 単一のメッシュオブジェクトの場合
+                    preview_mesh = mesh
+                    
+                preview_dialog = STLPreviewDialog(out_path, self, mesh=preview_mesh)
                 preview_dialog.show()  # モードレスダイアログとして表示
                 # ダイアログがガベージコレクションされないように参照を保持
                 self.preview_dialog = preview_dialog
                 
             except Exception as e:
                 print(f"STL生成エラー: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 self.input_label.setText(f"STL生成エラー: {str(e)}")
 
 # -------------------------------
