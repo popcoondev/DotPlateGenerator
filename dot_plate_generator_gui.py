@@ -183,6 +183,9 @@ class STLPreviewDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("STLプレビュー")
         self.setMinimumSize(600, 600)
+        # ダイアログのフラグ設定（×ボタンで閉じられるようにする）
+        from PyQt5.QtCore import Qt
+        self.setWindowFlags(self.windowFlags() | Qt.WindowSystemMenuHint | Qt.WindowCloseButtonHint)
         
         layout = QVBoxLayout()
         
@@ -226,6 +229,11 @@ class STLPreviewDialog(QDialog):
                     self.error_msg = error_msg
             
             QApplication.instance().postEvent(self, ErrorEvent(str(e)))
+    
+    def closeEvent(self, event):
+        # ダイアログが閉じられるときの処理
+        # スレッドの終了などクリーンアップが必要な場合はここで行う
+        event.accept()  # イベントを受け入れて、ウィンドウを閉じる
     
     def event(self, event):
         from PyQt5.QtCore import QEvent
@@ -431,6 +439,7 @@ class DotPlateApp(QMainWindow):
         
         self.image_path = None
         self.zoom_factor = 10
+        self.preview_dialog = None  # STLプレビューダイアログの参照
     
     def show_parameter_help(self, parameter_name):
         dialog = ParameterHelpDialog(parameter_name, self)
@@ -496,9 +505,11 @@ class DotPlateApp(QMainWindow):
                 
                 self.input_label.setText(f"{out_path} にエクスポートしました")
                 
-                # 別ウィンドウでプレビューを表示
+                # 別ウィンドウでプレビューを表示（モードレス）
                 preview_dialog = STLPreviewDialog(out_path, self)
-                preview_dialog.exec_()  # モーダルダイアログとして表示
+                preview_dialog.show()  # モードレスダイアログとして表示
+                # ダイアログがガベージコレクションされないように参照を保持
+                self.preview_dialog = preview_dialog
                 
             except Exception as e:
                 print(f"STL生成エラー: {str(e)}")
