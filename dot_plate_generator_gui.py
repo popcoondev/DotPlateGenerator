@@ -85,12 +85,33 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # 現在のピクセルの色を取得
                 pixel_color = tuple(pixels_rounded_np[y, x])
                 
-                x0 = x * dot_size - out_thickness
-                y0 = (grid_size - 1 - y) * dot_size - out_thickness
+                # 隣接ドットの確認
+                has_left = x > 0 and mask[y, x-1]
+                has_right = x < grid_size - 1 and mask[y, x+1]
+                has_top = y > 0 and mask[y-1, x]
+                has_bottom = y < grid_size - 1 and mask[y+1, x]
                 
-                # ベースブロックを外壁厚み分大きくする
-                block = box(extents=[dot_size + out_thickness * 2, dot_size + out_thickness * 2, base_height])
-                block.apply_translation([x0 + (dot_size + out_thickness * 2) / 2, y0 + (dot_size + out_thickness * 2) / 2, base_height / 2])
+                # 各方向の拡張量を計算
+                extend_left = 0 if has_left else out_thickness
+                extend_right = 0 if has_right else out_thickness
+                extend_top = 0 if has_top else out_thickness
+                extend_bottom = 0 if has_bottom else out_thickness
+                
+                # 基準座標を設定（拡張なしの場合）
+                x0 = x * dot_size
+                y0 = (grid_size - 1 - y) * dot_size
+                
+                # 各方向の拡張を考慮した座標と大きさの調整
+                base_width = dot_size + extend_left + extend_right
+                base_depth = dot_size + extend_top + extend_bottom
+                
+                # ベースブロックを適切な大きさで作成
+                block = box(extents=[base_width, base_depth, base_height])
+                
+                # 位置の調整（中心座標に移動）
+                x_center = x0 - extend_left + base_width / 2
+                y_center = y0 - extend_top + base_depth / 2
+                block.apply_translation([x_center, y_center, base_height / 2])
                 
                 # 色情報を追加
                 color_mapping[len(base_blocks)] = {
@@ -102,67 +123,129 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 base_blocks.append(block)
                 
                 # ドットの区切り壁とベースの輪郭壁を分けて処理
-                # 左・右の壁
+                # 通常の内側壁と外周壁で厚みを区別する
+                
+                # 壁の長さを計算（ベースの寸法に合わせる）
+                left_wall_length = base_depth
+                right_wall_length = base_depth
+                top_wall_length = base_width
+                bottom_wall_length = base_width
+                
+                # 内側壁（通常の壁厚）
+                # 左・右の内側壁
                 lr_wall_boxes = [
-                    box(extents=[wall_thickness, dot_size, wall_height]),
-                    box(extents=[wall_thickness, dot_size, wall_height]),
+                    box(extents=[wall_thickness, left_wall_length, wall_height]),
+                    box(extents=[wall_thickness, right_wall_length, wall_height]),
                 ]
-                # 上・下の壁
+                # 上・下の内側壁
                 tb_wall_boxes = [
-                    box(extents=[dot_size, wall_thickness, wall_height]),
-                    box(extents=[dot_size, wall_thickness, wall_height]),
+                    box(extents=[top_wall_length, wall_thickness, wall_height]),
+                    box(extents=[bottom_wall_length, wall_thickness, wall_height]),
                 ]
-                # 外壁壁ボックス（ベースプレートの輪郭にあたる壁のみ）
+                
+                # 外周壁（追加の厚みあり）
+                # 左・右の外周壁
+                lr_outer_wall_boxes = [
+                    box(extents=[wall_thickness + out_thickness, left_wall_length, wall_height]),
+                    box(extents=[wall_thickness + out_thickness, right_wall_length, wall_height]),
+                ]
+                # 上・下の外周壁
+                tb_outer_wall_boxes = [
+                    box(extents=[top_wall_length, wall_thickness + out_thickness, wall_height]),
+                    box(extents=[bottom_wall_length, wall_thickness + out_thickness, wall_height]),
+                ]
+                
+                # 壁ボックスのリスト
                 wall_boxes = []
+                
                 # X方向（左右）端のチェック
-                if x == 0 or not mask[y, x-1]:  # 左端または左が空白
-                    wall_boxes.append(box(extents=[wall_thickness, dot_size + out_thickness * 2, wall_height]))
+                if x == 0 or not mask[y, x-1]:  # 左端または左が空白（外周）
+                    wall_boxes.append(lr_outer_wall_boxes[0])  # 厚い外周壁
                 else:
-                    wall_boxes.append(lr_wall_boxes[0])
+                    wall_boxes.append(lr_wall_boxes[0])  # 通常の内側壁
                     
-                if x == grid_size - 1 or not mask[y, x+1]:  # 右端または右が空白
-                    wall_boxes.append(box(extents=[wall_thickness, dot_size + out_thickness * 2, wall_height]))
+                if x == grid_size - 1 or not mask[y, x+1]:  # 右端または右が空白（外周）
+                    wall_boxes.append(lr_outer_wall_boxes[1])  # 厚い外周壁
                 else:
-                    wall_boxes.append(lr_wall_boxes[1])
+                    wall_boxes.append(lr_wall_boxes[1])  # 通常の内側壁
                 
                 # Y方向（上下）端のチェック
-                if y == 0 or not mask[y-1, x]:  # 上端または上が空白
-                    wall_boxes.append(box(extents=[dot_size + out_thickness * 2, wall_thickness, wall_height]))
+                if y == 0 or not mask[y-1, x]:  # 上端または上が空白（外周）
+                    wall_boxes.append(tb_outer_wall_boxes[0])  # 厚い外周壁
                 else:
-                    wall_boxes.append(tb_wall_boxes[0])
+                    wall_boxes.append(tb_wall_boxes[0])  # 通常の内側壁
                     
-                if y == grid_size - 1 or not mask[y+1, x]:  # 下端または下が空白
-                    wall_boxes.append(box(extents=[dot_size + out_thickness * 2, wall_thickness, wall_height]))
+                if y == grid_size - 1 or not mask[y+1, x]:  # 下端または下が空白（外周）
+                    wall_boxes.append(tb_outer_wall_boxes[1])  # 厚い外周壁
                 else:
-                    wall_boxes.append(tb_wall_boxes[1])
+                    wall_boxes.append(tb_wall_boxes[1])  # 通常の内側壁
                 
                 # 壁の位置を設定する
                 positions = []
-                # X方向（左右）壁の位置
-                if x == 0 or not mask[y, x-1]:  # 左端または左が空白
-                    positions.append([x0 + wall_thickness / 2, y0 + (dot_size + out_thickness * 2) / 2, base_height + wall_height / 2])
-                else:
-                    # 通常の左壁
-                    positions.append([x0 + out_thickness + wall_thickness / 2, y0 + out_thickness + dot_size / 2, base_height + wall_height / 2])
                 
-                if x == grid_size - 1 or not mask[y, x+1]:  # 右端または右が空白
-                    positions.append([x0 + (dot_size + out_thickness * 2) - wall_thickness / 2, y0 + (dot_size + out_thickness * 2) / 2, base_height + wall_height / 2])
+                # X方向（左右）壁の位置
+                if x == 0 or not mask[y, x-1]:  # 左端または左が空白（外周）
+                    # 左外周壁の位置（外側に厚みを追加）
+                    # 外側の壁として、ベースの左端に合わせる
+                    positions.append([
+                        x0 - extend_left + (wall_thickness + out_thickness) / 2, 
+                        y_center,  # ベースの中心Y座標を使用
+                        base_height + wall_height / 2
+                    ])
                 else:
-                    # 通常の右壁
-                    positions.append([x0 + out_thickness + dot_size - wall_thickness / 2, y0 + out_thickness + dot_size / 2, base_height + wall_height / 2])
+                    # 通常の左内側壁
+                    positions.append([
+                        x0 + wall_thickness / 2,
+                        y_center,
+                        base_height + wall_height / 2
+                    ])
+                
+                if x == grid_size - 1 or not mask[y, x+1]:  # 右端または右が空白（外周）
+                    # 右外周壁の位置（外側に厚みを追加）
+                    # 外側の壁として、ベースの右端に合わせる
+                    positions.append([
+                        x0 + dot_size + extend_right - (wall_thickness + out_thickness) / 2,
+                        y_center,
+                        base_height + wall_height / 2
+                    ])
+                else:
+                    # 通常の右内側壁
+                    positions.append([
+                        x0 + dot_size - wall_thickness / 2,
+                        y_center,
+                        base_height + wall_height / 2
+                    ])
                 
                 # Y方向（上下）壁の位置
-                if y == 0 or not mask[y-1, x]:  # 上端または上が空白
-                    positions.append([x0 + (dot_size + out_thickness * 2) / 2, y0 + wall_thickness / 2, base_height + wall_height / 2])
+                if y == 0 or not mask[y-1, x]:  # 上端または上が空白（外周）
+                    # 上外周壁の位置（外側に厚みを追加）
+                    positions.append([
+                        x_center,  # ベースの中心X座標を使用
+                        y0 - extend_top + (wall_thickness + out_thickness) / 2,
+                        base_height + wall_height / 2
+                    ])
                 else:
-                    # 通常の上壁
-                    positions.append([x0 + out_thickness + dot_size / 2, y0 + out_thickness + wall_thickness / 2, base_height + wall_height / 2])
+                    # 通常の上内側壁
+                    positions.append([
+                        x_center,
+                        y0 + wall_thickness / 2,
+                        base_height + wall_height / 2
+                    ])
                 
-                if y == grid_size - 1 or not mask[y+1, x]:  # 下端または下が空白
-                    positions.append([x0 + (dot_size + out_thickness * 2) / 2, y0 + (dot_size + out_thickness * 2) - wall_thickness / 2, base_height + wall_height / 2])
+                if y == grid_size - 1 or not mask[y+1, x]:  # 下端または下が空白（外周）
+                    # 下外周壁の位置（外側に厚みを追加）
+                    positions.append([
+                        x_center,
+                        y0 + dot_size + extend_bottom - (wall_thickness + out_thickness) / 2,
+                        base_height + wall_height / 2
+                    ])
                 else:
-                    # 通常の下壁
-                    positions.append([x0 + out_thickness + dot_size / 2, y0 + out_thickness + dot_size - wall_thickness / 2, base_height + wall_height / 2])
+                    # 通常の下内側壁
+                    positions.append([
+                        x_center,
+                        y0 + dot_size - wall_thickness / 2,
+                        base_height + wall_height / 2
+                    ])
                 
                 for i, (wbox, pos) in enumerate(zip(wall_boxes, positions)):
                     wbox.apply_translation(pos)
