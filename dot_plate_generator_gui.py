@@ -161,23 +161,23 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # X方向（左右）端のチェック
                 if x == 0 or not mask[y, x-1]:  # 左端または左が空白（外周）
                     wall_boxes.append(lr_outer_wall_boxes[0])  # 厚い外周壁
-                elif not has_left:  # 左にドットがなく外周でもない場合
+                else:
                     wall_boxes.append(lr_wall_boxes[0])  # 通常の内側壁
                     
                 if x == grid_size - 1 or not mask[y, x+1]:  # 右端または右が空白（外周）
                     wall_boxes.append(lr_outer_wall_boxes[1])  # 厚い外周壁
-                elif not has_right:  # 右にドットがなく外周でもない場合
+                else:
                     wall_boxes.append(lr_wall_boxes[1])  # 通常の内側壁
                 
                 # Y方向（上下）端のチェック
                 if y == 0 or not mask[y-1, x]:  # 上端または上が空白（外周）
                     wall_boxes.append(tb_outer_wall_boxes[0])  # 厚い外周壁
-                elif not has_top:  # 上にドットがなく外周でもない場合
+                else:
                     wall_boxes.append(tb_wall_boxes[0])  # 通常の内側壁
                     
                 if y == grid_size - 1 or not mask[y+1, x]:  # 下端または下が空白（外周）
                     wall_boxes.append(tb_outer_wall_boxes[1])  # 厚い外周壁
-                elif not has_bottom:  # 下にドットがなく外周でもない場合
+                else:
                     wall_boxes.append(tb_wall_boxes[1])  # 通常の内側壁
                 
                 # 壁の位置を設定する
@@ -192,7 +192,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         y_center,  # ベースの中心Y座標を使用
                         base_height + wall_height / 2
                     ])
-                elif not has_left:  # 左にドットがなく外周でもない場合
+                else:
                     # 通常の左内側壁
                     positions.append([
                         x0 + wall_thickness / 2,
@@ -208,7 +208,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         y_center,
                         base_height + wall_height / 2
                     ])
-                elif not has_right:  # 右にドットがなく外周でもない場合
+                else:
                     # 通常の右内側壁
                     positions.append([
                         x0 + dot_size - wall_thickness / 2,
@@ -224,7 +224,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         y0 + dot_size + extend_top - (wall_thickness + out_thickness) / 2,
                         base_height + wall_height / 2
                     ])
-                elif not has_top:  # 上にドットがなく外周でもない場合
+                else:
                     # 通常の上内側壁
                     positions.append([
                         x_center,
@@ -239,7 +239,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         y0 - extend_bottom + (wall_thickness + out_thickness) / 2,
                         base_height + wall_height / 2
                     ])
-                elif not has_bottom:  # 下にドットがなく外周でもない場合
+                else:
                     # 通常の下内側壁
                     positions.append([
                         x_center,
