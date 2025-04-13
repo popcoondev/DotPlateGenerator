@@ -2,6 +2,7 @@
 # 必要ライブラリ: PyQt5, PIL, numpy, trimesh, shapely, skimage, scipy, matplotlib
 
 import sys
+import os
 import numpy as np
 from PIL import Image
 from collections import Counter
@@ -18,9 +19,18 @@ from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QPixmap, QImage, QColor
 from shapely.geometry import Polygon
 from skimage import measure
-import matplotlib.pyplot as plt
 from io import BytesIO
 import threading
+import time
+
+# Vedoをインポート (VTKベースの3D可視化ライブラリ)
+try:
+    import vedo
+    VEDO_AVAILABLE = True
+except ImportError:
+    print("vedo library not available, please install with: pip install vedo")
+    import matplotlib.pyplot as plt
+    VEDO_AVAILABLE = False
 
 # -------------------------------
 # 補助関数
@@ -269,6 +279,12 @@ class DotPlateApp(QMainWindow):
         
         self.preview_scroll.setWidget(self.preview_label)
         
+        # STLプレビュー用のラベル
+        self.stl_preview_label = QLabel("STLプレビューが表示されます")
+        self.stl_preview_label.setAlignment(Qt.AlignCenter)
+        self.stl_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.stl_preview_label.setMinimumSize(300, 300)
+        
         # ズームコントロール
         zoom_layout = QHBoxLayout()
         self.zoom_label = QLabel("ズーム:")
@@ -286,6 +302,13 @@ class DotPlateApp(QMainWindow):
         
         preview_group.setLayout(preview_layout)
         left_layout.addWidget(preview_group)
+        
+        # STLプレビュー領域
+        stl_preview_group = QGroupBox("STLプレビュー")
+        stl_preview_layout = QVBoxLayout()
+        stl_preview_layout.addWidget(self.stl_preview_label)
+        stl_preview_group.setLayout(stl_preview_layout)
+        left_layout.addWidget(stl_preview_group)
         
         # 右パネル（コントロール）
         right_panel = QWidget()
@@ -441,12 +464,26 @@ class DotPlateApp(QMainWindow):
         
         # 画像保存完了イベント
         if event.type() == QEvent.User + 10:  # ImageSavedEvent
-            self.input_label.setText(f"{self.input_label.text()} 正面からの画像を {event.filename} として保存しました")
+            # ファイル名に "top" が含まれているかどうかで上面/正面を判断
+            if "top" in event.filename:
+                message = f"上面からの画像を {event.filename} として保存しました"
+            else:
+                message = f"正面からの画像を {event.filename} として保存しました"
+                
+            # 既存のメッセージに追加
+            current_text = self.input_label.text()
+            # "保存しました" が含まれていなければ追加
+            if "保存しました" not in current_text:
+                self.input_label.setText(f"{current_text} {message}")
+            else:
+                # 既に画像保存メッセージがある場合は、そのメッセージの後に追加
+                self.input_label.setText(f"{current_text}、{message}")
+                
             return True
             
         # 画像保存エラーイベント
         elif event.type() == QEvent.User + 11:  # ImageSaveErrorEvent
-            self.input_label.setText(f"{self.input_label.text()} 正面画像の保存に失敗しました: {event.error_msg}")
+            self.input_label.setText(f"{self.input_label.text()} 画像の保存に失敗しました: {event.error_msg}")
             return True
             
         return super().event(event)
@@ -538,97 +575,188 @@ class DotPlateApp(QMainWindow):
     def show_stl_preview(self, mesh):
         """メインウィンドウにSTLプレビューを表示し、別スレッドで画像も保存"""
         try:
-            # UIプレビュー用の画像生成（斜めからのビュー）
-            fig = plt.figure(figsize=(6, 6))
-            ax = fig.add_subplot(111, projection='3d')
-            ax.view_init(elev=30, azim=45)
-            
-            # メッシュを表示
-            mesh.show(ax=ax)
-            
-            ax.set_axis_off()
-            plt.tight_layout()
-            
-            # 画像として保存
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            plt.close(fig)  # 必ずfigを閉じる
-            buf.seek(0)
-            
-            # QPixmapとして読み込み
-            qimg = QImage()
-            qimg.loadFromData(buf.getvalue())
-            pixmap = QPixmap.fromImage(qimg)
-            
-            # プレビューラベルに表示
-            self.stl_preview_label.setPixmap(pixmap)
-            self.stl_preview_label.setScaledContents(True)
-            
-            # 別スレッドで正面画像を保存
-            self.input_label.setText(f"{self.input_label.text()} 正面画像を保存中...")
+            # VEDO使用可能ならvedoで描画、なければmatplotlibにフォールバック
+            if VEDO_AVAILABLE:
+                # Vedoを使用したプレビュー生成
+                self._show_stl_preview_vedo(mesh)
+            else:
+                # MatplotlibでのプレビューにフォールバックAgg
+                self._show_stl_preview_matplotlib(mesh)
+                
+            # 別スレッドで画像を保存
+            self.input_label.setText(f"{self.input_label.text()} STLプレビュー画像を保存中...")
             QApplication.processEvents()  # UIを更新
-            
-            # メッシュのコピーを作成して別スレッドに渡す
-            import copy
-            mesh_copy = copy.deepcopy(mesh)
-            
+                
             # 別スレッドで画像保存
             save_thread = threading.Thread(
                 target=self.save_front_view_image, 
-                args=(mesh_copy,)
+                args=(mesh,)
             )
             save_thread.daemon = True  # メインスレッド終了時にこのスレッドも終了
             save_thread.start()
             
         except Exception as e:
             print(f"STLプレビュー表示エラー: {str(e)}")
-            self.stl_preview_label.setText(f"STLプレビュー表示失敗: {str(e)}")
+            if hasattr(self, 'stl_preview_label'):
+                self.stl_preview_label.setText(f"STLプレビュー表示失敗: {str(e)}")
+            else:
+                print(f"stl_preview_label属性が見つかりません: {str(e)}")
             import traceback
             traceback.print_exc()
     
-    def save_front_view_image(self, mesh):
-        """別スレッドで正面からの画像を保存"""
+    def _show_stl_preview_vedo(self, mesh):
+        """Vedoを使用したSTLプレビュー生成"""
+        # 一時的なSTLファイルを作成してvedo用にメッシュを準備
+        temp_stl_path = f"temp_preview_{int(time.time())}.stl"
+        mesh.export(temp_stl_path)
+        
         try:
-            import os
-            import time
-            from matplotlib import pyplot as plt
+            # Vedoのオフスクリーンレンダリング設定
+            vedo.settings.useOffScreen = True
             
-            timestamp = int(time.time())
-            filename = f"stl_front_view_{timestamp}.png"
-            save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+            # メッシュを読み込み
+            vmesh = vedo.Mesh(temp_stl_path)
             
-            # matplotlibのバックエンドをnon-interactiveに設定（Aggはスレッドセーフ）
-            import matplotlib
-            matplotlib.use('Agg')
+            # メッシュの中心と大きさを取得
+            center = vmesh.center_of_mass()
+            bounds = vmesh.bounds()
+            max_length = max(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4])
+            z_pos = bounds[5] + max_length * 2  # モデルの最大Z値より十分高い位置
             
-            # 正面からのビュー生成
-            front_fig = plt.figure(figsize=(8, 8))
-            front_ax = front_fig.add_subplot(111, projection='3d')
-            front_ax.view_init(elev=0, azim=0)  # 正面から
+            # プレビュー用のプロット設定
+            plt = vedo.Plotter(offscreen=True, size=(600, 600))
+            plt.add(vmesh)
             
-            # メッシュを表示
-            mesh.show(front_ax)
+            # カメラをZ軸正方向から少し斜めに配置
+            cam = plt.camera
+            # 真上からではなく、少し斜めから見る位置に設定
+            cam.SetPosition(center[0] + max_length*0.5, center[1] + max_length*0.5, z_pos)
+            cam.SetFocalPoint(center[0], center[1], center[2])
+            cam.SetViewUp(0, 1, 0)  # Y軸が上になるよう設定
             
-            front_ax.set_axis_off()
-            plt.tight_layout()
+            # 背景色を白にし、軸を非表示に
+            plt.background('white')
+            plt.axes(False)
             
-            # 画像を保存
-            plt.savefig(save_path, format='png', dpi=150)
-            plt.close(front_fig)
+            # 画像として保存
+            img_path = f"temp_preview_img_{int(time.time())}.png"
+            plt.screenshot(img_path)
+            plt.close()
             
-            # 完了通知をGUIスレッドに送信
-            # メインスレッドでのGUI更新を要求
-            from PyQt5.QtCore import QEvent
+            # 画像を読み込んでプレビューに表示
+            pixmap = QPixmap(img_path)
+            self.stl_preview_label.setPixmap(pixmap)
+            self.stl_preview_label.setScaledContents(True)
             
-            class ImageSavedEvent(QEvent):
-                def __init__(self, filename):
-                    super().__init__(QEvent.Type(QEvent.User + 10))
-                    self.filename = filename
-            
-            QApplication.instance().postEvent(self, ImageSavedEvent(filename))
+            # 一時ファイルを削除
+            os.remove(temp_stl_path)
+            os.remove(img_path)
             
         except Exception as e:
-            print(f"正面画像保存エラー: {str(e)}")
+            print(f"Vedoプレビューエラー: {str(e)}")
+            # 一時ファイルの削除を試行
+            if os.path.exists(temp_stl_path):
+                os.remove(temp_stl_path)
+            # エラー時はMatplotlibにフォールバック
+            self._show_stl_preview_matplotlib(mesh)
+    
+    def _show_stl_preview_matplotlib(self, mesh):
+        """MatplotlibでのSTLプレビュー生成（フォールバック用）"""
+        # MatplotlibでのAggバックエンド使用（スレッドセーフ）
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+            
+        # UIプレビュー用の画像生成（上面斜めからのビュー）
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # メッシュの中心と大きさを取得して最適な視点を設定
+        center = mesh.center_mass
+        min_bounds = mesh.bounds[0]
+        max_bounds = mesh.bounds[1]
+        
+        # Z軸正方向から少し斜めに見る角度に設定（真上90度ではなく80度程度）
+        ax.view_init(elev=80, azim=30)  # 真上から少し斜めに
+        
+        # メッシュを表示 (trimesh.Trimesh.show()はmatplotlibのax引数を受け付けない問題の修正)
+        # trimeshのvisuals.plotterでマニュアルで描画
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+        
+        # メッシュの頂点と面を取得
+        verts = mesh.vertices
+        faces = mesh.faces
+        
+        # 頂点をプロット
+        ax.scatter3D(verts[:, 0], verts[:, 1], verts[:, 2], c='k', s=0.1)
+        
+        # 面をプロット
+        mesh_collection = Poly3DCollection([verts[face] for face in faces], 
+                                          alpha=1.0, 
+                                          linewidths=0.1, 
+                                          edgecolors='k')
+        
+        # 面の色を設定
+        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'face_colors'):
+            face_colors = mesh.visual.face_colors
+            rgba_colors = face_colors / 255.0  # 0-1の範囲に正規化
+            mesh_collection.set_facecolors(rgba_colors)
+        else:
+            mesh_collection.set_facecolors((0.8, 0.8, 0.8))
+            
+        ax.add_collection3d(mesh_collection)
+        
+        # 軸の範囲を設定
+        all_verts = verts.reshape(-1, 3)
+        min_x, max_x = all_verts[:, 0].min(), all_verts[:, 0].max()
+        min_y, max_y = all_verts[:, 1].min(), all_verts[:, 1].max()
+        min_z, max_z = all_verts[:, 2].min(), all_verts[:, 2].max()
+        
+        ax.set_xlim(min_x, max_x)
+        ax.set_ylim(min_y, max_y)
+        ax.set_zlim(min_z, max_z)
+        
+        ax.set_axis_off()
+        plt.tight_layout()
+        
+        # 画像として保存
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=100)
+        plt.close(fig)  # 必ずfigを閉じる
+        buf.seek(0)
+        
+        # QPixmapとして読み込み
+        qimg = QImage()
+        qimg.loadFromData(buf.getvalue())
+        pixmap = QPixmap.fromImage(qimg)
+        
+        # プレビューラベルに表示
+        self.stl_preview_label.setPixmap(pixmap)
+        self.stl_preview_label.setScaledContents(True)
+    
+    def save_front_view_image(self, mesh):
+        """別スレッドで正面からの画像と上面からの画像を保存"""
+        try:
+            timestamp = int(time.time())
+            front_filename = f"stl_front_view_{timestamp}.png"
+            top_filename = f"stl_top_view_{timestamp}.png"
+            
+            front_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), front_filename)
+            top_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), top_filename)
+            
+            if VEDO_AVAILABLE:
+                # Vedoを使って正面からの画像を保存
+                self._save_front_view_vedo(mesh, front_save_path, front_filename)
+                # Vedoを使って上面からの画像を保存
+                self._save_top_view_vedo(mesh, top_save_path, top_filename)
+            else:
+                # Matplotlibで保存
+                self._save_front_view_matplotlib(mesh, front_save_path, front_filename)
+                # Matplotlibで上面からの画像を保存
+                self._save_top_view_matplotlib(mesh, top_save_path, top_filename)
+            
+        except Exception as e:
+            print(f"画像保存エラー: {str(e)}")
             import traceback
             traceback.print_exc()
             
@@ -641,6 +769,262 @@ class DotPlateApp(QMainWindow):
                     self.error_msg = error_msg
             
             QApplication.instance().postEvent(self, ImageSaveErrorEvent(str(e)))
+    
+    def _save_front_view_vedo(self, mesh, save_path, filename):
+        """Vedoを使った正面からの画像保存"""
+        # 一時的なSTLファイルを作成
+        temp_stl_path = f"temp_front_{int(time.time())}.stl"
+        mesh.export(temp_stl_path)
+        
+        try:
+            # Vedoのオフスクリーンレンダリング設定
+            vedo.settings.useOffScreen = True
+            
+            # メッシュを読み込み
+            vmesh = vedo.Mesh(temp_stl_path)
+            
+            # 正面からの視点に設定
+            plt = vedo.Plotter(offscreen=True, size=(800, 800))
+            plt.add(vmesh)
+            plt.camera.elevation(0)
+            plt.camera.azimuth(0)
+            
+            # 背景色を白にし、軸を非表示に
+            plt.background('white')
+            plt.axes(False)
+            
+            # 画像として保存（高解像度）
+            plt.screenshot(save_path, scale=2)
+            plt.close()
+            
+            # 一時ファイルを削除
+            if os.path.exists(temp_stl_path):
+                os.remove(temp_stl_path)
+            
+            # 完了通知をGUIスレッドに送信
+            from PyQt5.QtCore import QEvent
+            
+            class ImageSavedEvent(QEvent):
+                def __init__(self, filename):
+                    super().__init__(QEvent.Type(QEvent.User + 10))
+                    self.filename = filename
+            
+            QApplication.instance().postEvent(self, ImageSavedEvent(filename))
+            
+        except Exception as e:
+            # エラー時はMatplotlibにフォールバック
+            print(f"Vedo画像保存エラー: {str(e)}, Matplotlibにフォールバックします")
+            # 一時ファイルの削除を試行
+            if os.path.exists(temp_stl_path):
+                os.remove(temp_stl_path)
+            self._save_front_view_matplotlib(mesh, save_path, filename)
+            
+    def _save_top_view_vedo(self, mesh, save_path, filename):
+        """Vedoを使った上面（Z軸上から）の画像保存"""
+        # 一時的なSTLファイルを作成
+        temp_stl_path = f"temp_top_{int(time.time())}.stl"
+        mesh.export(temp_stl_path)
+        
+        try:
+            # Vedoのオフスクリーンレンダリング設定
+            vedo.settings.useOffScreen = True
+            
+            # メッシュを読み込み
+            vmesh = vedo.Mesh(temp_stl_path)
+            
+            # メッシュの中心と大きさを取得
+            center = vmesh.center_of_mass()
+            bounds = vmesh.bounds()
+            max_length = max(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4])
+            z_pos = bounds[5] + max_length * 2  # モデルの最大Z値より十分高い位置
+            
+            # 上面からの視点に設定 (Z軸正方向から原点を見る)
+            plt = vedo.Plotter(offscreen=True, size=(800, 800))
+            plt.add(vmesh)
+            
+            # カメラをZ軸正方向に配置し、メッシュの中心を見るよう設定
+            cam = plt.camera
+            cam.SetPosition(center[0], center[1], z_pos)
+            cam.SetFocalPoint(center[0], center[1], center[2])
+            cam.SetViewUp(0, 1, 0)  # Y軸が上になるよう設定
+            
+            # 背景色を白にし、軸を非表示に
+            plt.background('white')
+            plt.axes(False)
+            
+            # 画像として保存（高解像度）
+            plt.screenshot(save_path, scale=2)
+            plt.close()
+            
+            # 一時ファイルを削除
+            if os.path.exists(temp_stl_path):
+                os.remove(temp_stl_path)
+            
+            # 完了通知をGUIスレッドに送信
+            from PyQt5.QtCore import QEvent
+            
+            class ImageSavedEvent(QEvent):
+                def __init__(self, filename):
+                    super().__init__(QEvent.Type(QEvent.User + 10))
+                    self.filename = filename
+            
+            QApplication.instance().postEvent(self, ImageSavedEvent(filename))
+            
+        except Exception as e:
+            # エラー時はMatplotlibにフォールバック
+            print(f"Vedo上面画像保存エラー: {str(e)}, Matplotlibにフォールバックします")
+            # 一時ファイルの削除を試行
+            if os.path.exists(temp_stl_path):
+                os.remove(temp_stl_path)
+            self._save_top_view_matplotlib(mesh, save_path, filename)
+    
+    def _save_front_view_matplotlib(self, mesh, save_path, filename):
+        """Matplotlibでの正面からの画像保存（フォールバック用）"""
+        # MatplotlibでのAggバックエンド使用（スレッドセーフ）
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
+        # 正面からのビュー生成
+        front_fig = plt.figure(figsize=(8, 8))
+        front_ax = front_fig.add_subplot(111, projection='3d')
+        front_ax.view_init(elev=0, azim=0)  # 正面から
+        
+        # メッシュを表示 (trimesh.Trimesh.show()はmatplotlibのax引数を受け付けない問題の修正)
+        # trimeshのvisuals.plotterでマニュアルで描画
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+        
+        # メッシュの頂点と面を取得
+        verts = mesh.vertices
+        faces = mesh.faces
+        
+        # 頂点をプロット
+        front_ax.scatter3D(verts[:, 0], verts[:, 1], verts[:, 2], c='k', s=0.1)
+        
+        # 面をプロット
+        mesh_collection = Poly3DCollection([verts[face] for face in faces], 
+                                          alpha=1.0, 
+                                          linewidths=0.1, 
+                                          edgecolors='k')
+        
+        # 面の色を設定
+        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'face_colors'):
+            face_colors = mesh.visual.face_colors
+            rgba_colors = face_colors / 255.0  # 0-1の範囲に正規化
+            mesh_collection.set_facecolors(rgba_colors)
+        else:
+            mesh_collection.set_facecolors((0.8, 0.8, 0.8))
+            
+        front_ax.add_collection3d(mesh_collection)
+        
+        # 軸の範囲を設定
+        all_verts = verts.reshape(-1, 3)
+        min_x, max_x = all_verts[:, 0].min(), all_verts[:, 0].max()
+        min_y, max_y = all_verts[:, 1].min(), all_verts[:, 1].max()
+        min_z, max_z = all_verts[:, 2].min(), all_verts[:, 2].max()
+        
+        front_ax.set_xlim(min_x, max_x)
+        front_ax.set_ylim(min_y, max_y)
+        front_ax.set_zlim(min_z, max_z)
+        
+        front_ax.set_axis_off()
+        plt.tight_layout()
+        
+        # 画像を保存
+        plt.savefig(save_path, format='png', dpi=150)
+        plt.close(front_fig)
+        
+        # 完了通知をGUIスレッドに送信
+        from PyQt5.QtCore import QEvent
+        
+        class ImageSavedEvent(QEvent):
+            def __init__(self, filename):
+                super().__init__(QEvent.Type(QEvent.User + 10))
+                self.filename = filename
+        
+        QApplication.instance().postEvent(self, ImageSavedEvent(filename))
+    
+    def _save_top_view_matplotlib(self, mesh, save_path, filename):
+        """Matplotlibでの上面からの画像保存（Z軸上から見下ろす視点）"""
+        # MatplotlibでのAggバックエンド使用（スレッドセーフ）
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
+        # 上面からのビュー生成
+        top_fig = plt.figure(figsize=(8, 8))
+        top_ax = top_fig.add_subplot(111, projection='3d')
+        
+        # メッシュを表示 (trimesh.Trimesh.show()はmatplotlibのax引数を受け付けない問題の修正)
+        # trimeshのvisuals.plotterでマニュアルで描画
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+        
+        # メッシュの頂点と面を取得
+        verts = mesh.vertices
+        faces = mesh.faces
+        
+        # メッシュの中心と大きさを取得
+        center = mesh.center_mass
+        min_bounds = mesh.bounds[0]
+        max_bounds = mesh.bounds[1]
+        max_length = max(max_bounds[0] - min_bounds[0], 
+                          max_bounds[1] - min_bounds[1], 
+                          max_bounds[2] - min_bounds[2])
+        
+        # Z軸正方向からメッシュの中心を見るようにカメラを設定
+        # matplotlibでは直接カメラ位置は設定できないので、視点角度と距離で調整
+        top_ax.view_init(elev=90, azim=0)  # 真上から見下ろす角度
+        
+        # 頂点をプロット
+        top_ax.scatter3D(verts[:, 0], verts[:, 1], verts[:, 2], c='k', s=0.1)
+        
+        # 面をプロット
+        mesh_collection = Poly3DCollection([verts[face] for face in faces], 
+                                          alpha=1.0, 
+                                          linewidths=0.1, 
+                                          edgecolors='k')
+        
+        # 面の色を設定
+        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'face_colors'):
+            face_colors = mesh.visual.face_colors
+            rgba_colors = face_colors / 255.0  # 0-1の範囲に正規化
+            mesh_collection.set_facecolors(rgba_colors)
+        else:
+            mesh_collection.set_facecolors((0.8, 0.8, 0.8))
+            
+        top_ax.add_collection3d(mesh_collection)
+        
+        # 軸の範囲を設定
+        all_verts = verts.reshape(-1, 3)
+        min_x, max_x = all_verts[:, 0].min(), all_verts[:, 0].max()
+        min_y, max_y = all_verts[:, 1].min(), all_verts[:, 1].max()
+        min_z, max_z = all_verts[:, 2].min(), all_verts[:, 2].max()
+        
+        # 視点調整のため、Z軸の範囲を広げる
+        extra_z = max_length * 1.5
+        top_ax.set_xlim(min_x, max_x)
+        top_ax.set_ylim(min_y, max_y)
+        top_ax.set_zlim(min_z, max_z + extra_z)  # 上方向に余裕を持たせる
+        
+        # カメラ位置をZ軸正方向に設定（matplotlibでは間接的に）
+        top_ax.dist = 8  # カメラと対象物の距離
+        
+        top_ax.set_axis_off()
+        plt.tight_layout()
+        
+        # 画像を保存
+        plt.savefig(save_path, format='png', dpi=150)
+        plt.close(top_fig)
+        
+        # 完了通知をGUIスレッドに送信
+        from PyQt5.QtCore import QEvent
+        
+        class ImageSavedEvent(QEvent):
+            def __init__(self, filename):
+                super().__init__(QEvent.Type(QEvent.User + 10))
+                self.filename = filename
+        
+        QApplication.instance().postEvent(self, ImageSavedEvent(filename))
 
 # -------------------------------
 # 実行エントリポイント
