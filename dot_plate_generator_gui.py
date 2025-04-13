@@ -434,6 +434,22 @@ class DotPlateApp(QMainWindow):
         if color.isValid():
             self.wall_color = color
             self.set_button_color(self.wall_color_button, color)
+            
+    def event(self, event):
+        """カスタムイベントの処理"""
+        from PyQt5.QtCore import QEvent
+        
+        # 画像保存完了イベント
+        if event.type() == QEvent.User + 10:  # ImageSavedEvent
+            self.input_label.setText(f"{self.input_label.text()} 正面からの画像を {event.filename} として保存しました")
+            return True
+            
+        # 画像保存エラーイベント
+        elif event.type() == QEvent.User + 11:  # ImageSaveErrorEvent
+            self.input_label.setText(f"{self.input_label.text()} 正面画像の保存に失敗しました: {event.error_msg}")
+            return True
+            
+        return super().event(event)
     
     def select_image(self):
         path, _ = QFileDialog.getOpenFileName(self, "画像を開く", "", "画像ファイル (*.png *.jpg *.jpeg)")
@@ -520,9 +536,9 @@ class DotPlateApp(QMainWindow):
                 self.input_label.setText(f"STL生成エラー: {str(e)}")
     
     def show_stl_preview(self, mesh):
-        """メインウィンドウにSTLプレビューを表示"""
+        """メインウィンドウにSTLプレビューを表示し、別スレッドで画像も保存"""
         try:
-            # Matplotlibで3Dプレビューを生成
+            # UIプレビュー用の画像生成（斜めからのビュー）
             fig = plt.figure(figsize=(6, 6))
             ax = fig.add_subplot(111, projection='3d')
             ax.view_init(elev=30, azim=45)
@@ -536,7 +552,7 @@ class DotPlateApp(QMainWindow):
             # 画像として保存
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100)
-            plt.close(fig)
+            plt.close(fig)  # 必ずfigを閉じる
             buf.seek(0)
             
             # QPixmapとして読み込み
@@ -548,9 +564,83 @@ class DotPlateApp(QMainWindow):
             self.stl_preview_label.setPixmap(pixmap)
             self.stl_preview_label.setScaledContents(True)
             
+            # 別スレッドで正面画像を保存
+            self.input_label.setText(f"{self.input_label.text()} 正面画像を保存中...")
+            QApplication.processEvents()  # UIを更新
+            
+            # メッシュのコピーを作成して別スレッドに渡す
+            import copy
+            mesh_copy = copy.deepcopy(mesh)
+            
+            # 別スレッドで画像保存
+            save_thread = threading.Thread(
+                target=self.save_front_view_image, 
+                args=(mesh_copy,)
+            )
+            save_thread.daemon = True  # メインスレッド終了時にこのスレッドも終了
+            save_thread.start()
+            
         except Exception as e:
             print(f"STLプレビュー表示エラー: {str(e)}")
             self.stl_preview_label.setText(f"STLプレビュー表示失敗: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def save_front_view_image(self, mesh):
+        """別スレッドで正面からの画像を保存"""
+        try:
+            import os
+            import time
+            from matplotlib import pyplot as plt
+            
+            timestamp = int(time.time())
+            filename = f"stl_front_view_{timestamp}.png"
+            save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+            
+            # matplotlibのバックエンドをnon-interactiveに設定（Aggはスレッドセーフ）
+            import matplotlib
+            matplotlib.use('Agg')
+            
+            # 正面からのビュー生成
+            front_fig = plt.figure(figsize=(8, 8))
+            front_ax = front_fig.add_subplot(111, projection='3d')
+            front_ax.view_init(elev=0, azim=0)  # 正面から
+            
+            # メッシュを表示
+            mesh.show(front_ax)
+            
+            front_ax.set_axis_off()
+            plt.tight_layout()
+            
+            # 画像を保存
+            plt.savefig(save_path, format='png', dpi=150)
+            plt.close(front_fig)
+            
+            # 完了通知をGUIスレッドに送信
+            # メインスレッドでのGUI更新を要求
+            from PyQt5.QtCore import QEvent
+            
+            class ImageSavedEvent(QEvent):
+                def __init__(self, filename):
+                    super().__init__(QEvent.Type(QEvent.User + 10))
+                    self.filename = filename
+            
+            QApplication.instance().postEvent(self, ImageSavedEvent(filename))
+            
+        except Exception as e:
+            print(f"正面画像保存エラー: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # エラー通知
+            from PyQt5.QtCore import QEvent
+            
+            class ImageSaveErrorEvent(QEvent):
+                def __init__(self, error_msg):
+                    super().__init__(QEvent.Type(QEvent.User + 11))
+                    self.error_msg = error_msg
+            
+            QApplication.instance().postEvent(self, ImageSaveErrorEvent(str(e)))
 
 # -------------------------------
 # 実行エントリポイント
