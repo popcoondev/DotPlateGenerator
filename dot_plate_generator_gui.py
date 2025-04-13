@@ -383,9 +383,46 @@ class DotPlateApp(QMainWindow):
         original_area.addWidget(original_label)
         original_area.addWidget(self.original_scroll)
         
+        # クリック可能なカスタムラベルの定義
+        from PyQt5.QtCore import pyqtSignal
+        
+        class ClickableLabel(QLabel):
+            clicked = pyqtSignal(int, int)  # x, y座標を返すシグナル
+            
+            def __init__(self, text):
+                super().__init__(text)
+                self.pixmap_size = None
+                self.grid_size = None
+                self.zoom_factor = None
+            
+            def mousePressEvent(self, event):
+                if self.pixmap() and self.pixmap_size:
+                    # クリック位置をピクセル座標に変換
+                    pos = event.pos()
+                    label_width = self.width()
+                    label_height = self.height()
+                    pixmap_width, pixmap_height = self.pixmap_size
+                    
+                    # ラベルとピクセル座標の比率を計算
+                    scale_x = pixmap_width / label_width if label_width else 1
+                    scale_y = pixmap_height / label_height if label_height else 1
+                    
+                    # ピクセル座標に変換
+                    pixel_x = int(pos.x() * scale_x)
+                    pixel_y = int(pos.y() * scale_y)
+                    
+                    # グリッド座標に変換（ズームを考慮）
+                    if self.grid_size and self.zoom_factor:
+                        grid_x = pixel_x // self.zoom_factor
+                        grid_y = pixel_y // self.zoom_factor
+                        
+                        # グリッドサイズの範囲内かチェック
+                        if 0 <= grid_x < self.grid_size and 0 <= grid_y < self.grid_size:
+                            self.clicked.emit(grid_x, grid_y)
+        
         # 減色後画像表示エリア
         reduced_area = QVBoxLayout()
-        reduced_label = QLabel("減色後のドット画像")
+        reduced_label = QLabel("減色後のドット画像（クリックで色を変更）")
         reduced_label.setAlignment(Qt.AlignCenter)
         
         self.preview_scroll = QScrollArea()
@@ -393,9 +430,13 @@ class DotPlateApp(QMainWindow):
         self.preview_scroll.setMinimumHeight(350)
         self.preview_scroll.setMinimumWidth(250)
         
-        self.preview_label = QLabel("プレビューが表示されます")
+        # クリック可能なカスタムラベルを使用
+        self.preview_label = ClickableLabel("プレビューが表示されます")
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # クリックシグナルを接続
+        self.preview_label.clicked.connect(self.on_preview_clicked)
         
         self.preview_scroll.setWidget(self.preview_label)
         
@@ -569,6 +610,10 @@ class DotPlateApp(QMainWindow):
         
         self.image_path = None
         self.zoom_factor = 10
+        
+        # ドット編集用の変数
+        self.current_grid_size = 32  # デフォルト値
+        self.pixels_rounded_np = None  # 減色後の画像データ
     
     def show_parameter_help(self, parameter_name):
         dialog = ParameterHelpDialog(parameter_name, self)
@@ -584,6 +629,24 @@ class DotPlateApp(QMainWindow):
         if color.isValid():
             self.wall_color = color
             self.set_button_color(self.wall_color_button, color)
+            
+    def on_preview_clicked(self, grid_x, grid_y):
+        """減色後のプレビュー画像内のドットがクリックされたときの処理"""
+        if self.pixels_rounded_np is None:
+            return
+            
+        # 既存の色を取得
+        current_color = self.pixels_rounded_np[grid_y, grid_x]
+        rgb_color = QColor(current_color[0], current_color[1], current_color[2])
+        
+        # 色選択ダイアログを表示
+        new_color = QColorDialog.getColor(rgb_color, self, "ドットの色を選択")
+        if new_color.isValid():
+            # ピクセルの色を更新
+            self.pixels_rounded_np[grid_y, grid_x] = [new_color.red(), new_color.green(), new_color.blue()]
+            
+            # プレビューを更新（編集したピクセルデータを使用）
+            self.update_preview(custom_pixels=self.pixels_rounded_np)
             
     def event(self, event):
         """カスタムイベントの処理"""
@@ -622,15 +685,24 @@ class DotPlateApp(QMainWindow):
             self.input_label.setText(path)
             self.update_preview()
     
-    def update_preview(self):
+    def update_preview(self, custom_pixels=None):
+        """プレビュー画像を更新する（custom_pixelsが指定された場合はそれを使用）"""
         if not self.image_path:
             return
         
         self.zoom_factor = self.zoom_slider.value()
         params = {key: spin.value() for key, spin in self.controls.items()}
         
+        # 現在のグリッドサイズを保存
+        self.current_grid_size = int(params["Grid Size"])
+        
         # オリジナル画像の表示
         original_img = Image.open(self.image_path)
+        
+        # GIF画像の場合は最初のフレームを取得
+        if hasattr(original_img, 'format') and original_img.format == 'GIF' and 'duration' in original_img.info:
+            # アニメーションGIFの場合
+            original_img = original_img.convert('RGBA')  # 透明部分を適切に処理
         
         # 画像が大きすぎる場合はリサイズ
         max_display_size = 500
@@ -650,20 +722,47 @@ class DotPlateApp(QMainWindow):
         self.original_image_label.setPixmap(original_pixmap)
         self.original_image_label.adjustSize()
         
-        # 減色後の画像を生成して表示
-        preview_img = generate_preview_image(
-            self.image_path,
-            int(params["Grid Size"]),
-            int(params["Color Step"]),
-            int(params["Top Colors"]),
-            self.zoom_factor
-        )
+        # 減色後の画像を生成または更新
+        if custom_pixels is not None:
+            # カスタムピクセルデータ（編集済み）を使用
+            self.pixels_rounded_np = custom_pixels
+            preview_img = Image.fromarray(self.pixels_rounded_np, mode="RGB")
+            preview_img = preview_img.resize((self.current_grid_size * self.zoom_factor, 
+                                             self.current_grid_size * self.zoom_factor), 
+                                            resample=Image.NEAREST)
+        else:
+            # 新たに画像を生成
+            preview_img = generate_preview_image(
+                self.image_path,
+                self.current_grid_size,
+                int(params["Color Step"]),
+                int(params["Top Colors"]),
+                self.zoom_factor
+            )
+            
+            # ピクセルデータを保存（後でドット編集時に使用）
+            img_resized = Image.open(self.image_path).convert("RGB").resize(
+                (self.current_grid_size, self.current_grid_size), resample=Image.NEAREST)
+            pixels = np.array(img_resized).reshape(-1, 3)
+            pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
+            colors = [tuple(c) for c in pixels_normalized]
+            color_counts = Counter(colors)
+            top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
+            pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+            self.pixels_rounded_np = np.array(pixels_rounded, dtype=np.uint8).reshape(
+                (self.current_grid_size, self.current_grid_size, 3))
         
+        # プレビュー画像をQPixmapに変換して表示
         preview_buffer = BytesIO()
         preview_img.save(preview_buffer, format="PNG")
         preview_qimg = QImage()
         preview_qimg.loadFromData(preview_buffer.getvalue())
         preview_pixmap = QPixmap.fromImage(preview_qimg)
+        
+        # クリックイベント用にピクセルサイズ情報を設定
+        self.preview_label.pixmap_size = (preview_pixmap.width(), preview_pixmap.height())
+        self.preview_label.grid_size = self.current_grid_size
+        self.preview_label.zoom_factor = self.zoom_factor
         
         self.preview_label.setPixmap(preview_pixmap)
         self.preview_label.adjustSize()
