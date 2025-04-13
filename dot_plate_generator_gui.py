@@ -358,20 +358,53 @@ class DotPlateApp(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         
         # 画像プレビュー領域
-        preview_group = QGroupBox("ドットプレビュー")
+        preview_group = QGroupBox("画像プレビュー")
         preview_layout = QVBoxLayout()
         
-        # プレビュー表示のためのスクロールエリア
+        # プレビュー表示用の水平レイアウト（オリジナルと減色後の画像を並べる）
+        preview_images_layout = QHBoxLayout()
+        
+        # オリジナル画像表示エリア
+        original_area = QVBoxLayout()
+        original_label = QLabel("オリジナル画像")
+        original_label.setAlignment(Qt.AlignCenter)
+        
+        self.original_scroll = QScrollArea()
+        self.original_scroll.setWidgetResizable(True)
+        self.original_scroll.setMinimumHeight(350)
+        self.original_scroll.setMinimumWidth(250)
+        
+        self.original_image_label = QLabel("オリジナル画像が表示されます")
+        self.original_image_label.setAlignment(Qt.AlignCenter)
+        self.original_image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        self.original_scroll.setWidget(self.original_image_label)
+        
+        original_area.addWidget(original_label)
+        original_area.addWidget(self.original_scroll)
+        
+        # 減色後画像表示エリア
+        reduced_area = QVBoxLayout()
+        reduced_label = QLabel("減色後のドット画像")
+        reduced_label.setAlignment(Qt.AlignCenter)
+        
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
-        self.preview_scroll.setMinimumHeight(400)
-        self.preview_scroll.setMinimumWidth(400)
+        self.preview_scroll.setMinimumHeight(350)
+        self.preview_scroll.setMinimumWidth(250)
         
         self.preview_label = QLabel("プレビューが表示されます")
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         self.preview_scroll.setWidget(self.preview_label)
+        
+        reduced_area.addWidget(reduced_label)
+        reduced_area.addWidget(self.preview_scroll)
+        
+        # 両方の画像エリアを水平に並べる
+        preview_images_layout.addLayout(original_area)
+        preview_images_layout.addLayout(reduced_area)
         
         # STLプレビュー用のラベル
         self.stl_preview_label = QLabel("STLプレビューが表示されます")
@@ -391,7 +424,7 @@ class DotPlateApp(QMainWindow):
         zoom_layout.addWidget(self.zoom_label)
         zoom_layout.addWidget(self.zoom_slider)
         
-        preview_layout.addWidget(self.preview_scroll)
+        preview_layout.addLayout(preview_images_layout)
         preview_layout.addLayout(zoom_layout)
         
         preview_group.setLayout(preview_layout)
@@ -596,7 +629,29 @@ class DotPlateApp(QMainWindow):
         self.zoom_factor = self.zoom_slider.value()
         params = {key: spin.value() for key, spin in self.controls.items()}
         
-        img = generate_preview_image(
+        # オリジナル画像の表示
+        original_img = Image.open(self.image_path)
+        
+        # 画像が大きすぎる場合はリサイズ
+        max_display_size = 500
+        if max(original_img.width, original_img.height) > max_display_size:
+            # アスペクト比を維持しながらリサイズ
+            ratio = max_display_size / max(original_img.width, original_img.height)
+            new_size = (int(original_img.width * ratio), int(original_img.height * ratio))
+            original_img = original_img.resize(new_size, Image.LANCZOS)
+        
+        # オリジナル画像をQPixmapに変換して表示
+        original_buffer = BytesIO()
+        original_img.save(original_buffer, format="PNG")
+        original_qimg = QImage()
+        original_qimg.loadFromData(original_buffer.getvalue())
+        original_pixmap = QPixmap.fromImage(original_qimg)
+        
+        self.original_image_label.setPixmap(original_pixmap)
+        self.original_image_label.adjustSize()
+        
+        # 減色後の画像を生成して表示
+        preview_img = generate_preview_image(
             self.image_path,
             int(params["Grid Size"]),
             int(params["Color Step"]),
@@ -604,13 +659,13 @@ class DotPlateApp(QMainWindow):
             self.zoom_factor
         )
         
-        buffer = BytesIO()
-        img.save(buffer, format="PNG")
-        qimg = QImage()
-        qimg.loadFromData(buffer.getvalue())
-        pixmap = QPixmap.fromImage(qimg)
+        preview_buffer = BytesIO()
+        preview_img.save(preview_buffer, format="PNG")
+        preview_qimg = QImage()
+        preview_qimg.loadFromData(preview_buffer.getvalue())
+        preview_pixmap = QPixmap.fromImage(preview_qimg)
         
-        self.preview_label.setPixmap(pixmap)
+        self.preview_label.setPixmap(preview_pixmap)
         self.preview_label.adjustSize()
     
     def export_stl(self):
