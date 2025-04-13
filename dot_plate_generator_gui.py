@@ -221,7 +221,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                     # 上外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x_center,  # ベースの中心X座標を使用
-                        y0 - extend_top + (wall_thickness + out_thickness) / 2,
+                        y0 + dot_size + extend_top - (wall_thickness + out_thickness) / 2,
                         base_height + wall_height / 2
                     ])
                 else:
@@ -236,7 +236,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                     # 下外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x_center,
-                        y0 + dot_size + extend_bottom - (wall_thickness + out_thickness) / 2,
+                        y0 - extend_bottom + (wall_thickness + out_thickness) / 2,
                         base_height + wall_height / 2
                     ])
                 else:
