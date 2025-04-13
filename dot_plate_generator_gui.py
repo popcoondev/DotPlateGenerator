@@ -362,11 +362,11 @@ class DotPlateApp(QMainWindow):
         # パラメータ定義
         parameters = [
             ("Grid Size", 32, 8, 64),
-            ("Dot Size", 1.0, 0.2, 5.0),
+            ("Dot Size", 2.0, 0.2, 5.0),
             ("Wall Thickness", 0.2, 0.0, 5.0),
-            ("Wall Height", 1.0, 0.0, 5.0),
+            ("Wall Height", 0.4, 0.0, 5.0),
             ("Base Height", 2.0, 0.0, 5.0),
-            ("Out Thickness", 0.1, 0.0, 5.0),
+            ("Out Thickness", 0.0, 0.0, 5.0),
             ("Color Step", 8, 1, 64),
             ("Top Colors", 36, 1, 64)
         ]
@@ -627,12 +627,12 @@ class DotPlateApp(QMainWindow):
             plt = vedo.Plotter(offscreen=True, size=(600, 600))
             plt.add(vmesh)
             
-            # カメラをZ軸正方向から少し斜めに配置
+            # カメラをZ軸正方向から真上に配置（Z軸真正面から見る）
             cam = plt.camera
-            # 真上からではなく、少し斜めから見る位置に設定
-            cam.SetPosition(center[0] + max_length*0.5, center[1] + max_length*0.5, z_pos)
+            # 完全に真上からの視点に設定
+            cam.SetPosition(center[0], center[1], z_pos)
             cam.SetFocalPoint(center[0], center[1], center[2])
-            cam.SetViewUp(0, 1, 0)  # Y軸が上になるよう設定
+            cam.SetViewUp(-1, 0, 0)  # X軸負方向が上になるよう設定（反時計回りに90度回転）
             
             # 背景色を白にし、軸を非表示に
             plt.background('white')
@@ -676,8 +676,8 @@ class DotPlateApp(QMainWindow):
         min_bounds = mesh.bounds[0]
         max_bounds = mesh.bounds[1]
         
-        # Z軸正方向から少し斜めに見る角度に設定（真上90度ではなく80度程度）
-        ax.view_init(elev=80, azim=30)  # 真上から少し斜めに
+        # Z軸正方向から真上に見る角度に設定（完全に90度）
+        ax.view_init(elev=90, azim=90)  # 真上から見て反時計回りに90度回転（azimuthを90度に）
         
         # メッシュを表示 (trimesh.Trimesh.show()はmatplotlibのax引数を受け付けない問題の修正)
         # trimeshのvisuals.plotterでマニュアルで描画
@@ -846,7 +846,7 @@ class DotPlateApp(QMainWindow):
             cam = plt.camera
             cam.SetPosition(center[0], center[1], z_pos)
             cam.SetFocalPoint(center[0], center[1], center[2])
-            cam.SetViewUp(0, 1, 0)  # Y軸が上になるよう設定
+            cam.SetViewUp(-1, 0, 0)  # X軸負方向が上になるよう設定（反時計回りに90度回転）
             
             # 背景色を白にし、軸を非表示に
             plt.background('white')
@@ -973,7 +973,7 @@ class DotPlateApp(QMainWindow):
         
         # Z軸正方向からメッシュの中心を見るようにカメラを設定
         # matplotlibでは直接カメラ位置は設定できないので、視点角度と距離で調整
-        top_ax.view_init(elev=90, azim=0)  # 真上から見下ろす角度
+        top_ax.view_init(elev=90, azim=90)  # 真上から見下ろす角度、azimuth=90で反時計回りに90度回転
         
         # 頂点をプロット
         top_ax.scatter3D(verts[:, 0], verts[:, 1], verts[:, 2], c='k', s=0.1)
