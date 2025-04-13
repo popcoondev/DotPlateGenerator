@@ -85,11 +85,17 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # 現在のピクセルの色を取得
                 pixel_color = tuple(pixels_rounded_np[y, x])
                 
-                # 隣接ドットの確認
+                # 隣接ドットの確認（表示に利用するが壁の生成には直接影響させない）
                 has_left = x > 0 and mask[y, x-1]
                 has_right = x < grid_size - 1 and mask[y, x+1]
                 has_top = y > 0 and mask[y-1, x]
                 has_bottom = y < grid_size - 1 and mask[y+1, x]
+                
+                # 外周条件の確認（これは壁の生成に使用）
+                is_left_edge = x == 0 or not mask[y, x-1]
+                is_right_edge = x == grid_size - 1 or not mask[y, x+1]
+                is_top_edge = y == 0 or not mask[y-1, x]
+                is_bottom_edge = y == grid_size - 1 or not mask[y+1, x]
                 
                 # 各方向の拡張量を計算
                 extend_left = 0 if has_left else out_thickness
@@ -131,19 +137,20 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 top_wall_length = base_width
                 bottom_wall_length = base_width
                 
-                # 内側壁（通常の壁厚）
-                # 左・右の内側壁
+                # まずすべてのドットに対して基本的な内壁を作成
+                # 左・右の内側壁（基本壁）
                 lr_wall_boxes = [
                     box(extents=[wall_thickness, left_wall_length, wall_height]),
                     box(extents=[wall_thickness, right_wall_length, wall_height]),
                 ]
-                # 上・下の内側壁
+                
+                # 上・下の内側壁（基本壁）
                 tb_wall_boxes = [
                     box(extents=[top_wall_length, wall_thickness, wall_height]),
                     box(extents=[bottom_wall_length, wall_thickness, wall_height]),
                 ]
                 
-                # 外周壁（追加の厚みあり）
+                # 外周壁（追加の厚みあり）- 外部に面しているドットのみに適用
                 # 左・右の外周壁
                 lr_outer_wall_boxes = [
                     box(extents=[wall_thickness + out_thickness, left_wall_length, wall_height]),
@@ -158,24 +165,28 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # 壁ボックスのリスト
                 wall_boxes = []
                 
-                # X方向（左右）端のチェック
-                if x == 0 or not mask[y, x-1]:  # 左端または左が空白（外周）
+                # まず左右方向の壁を設定（基本は内壁）
+                # 左側の壁
+                if is_left_edge:  # 左端または左が空白（外周）
                     wall_boxes.append(lr_outer_wall_boxes[0])  # 厚い外周壁
                 else:
                     wall_boxes.append(lr_wall_boxes[0])  # 通常の内側壁
-                    
-                if x == grid_size - 1 or not mask[y, x+1]:  # 右端または右が空白（外周）
+                
+                # 右側の壁
+                if is_right_edge:  # 右端または右が空白（外周）
                     wall_boxes.append(lr_outer_wall_boxes[1])  # 厚い外周壁
                 else:
                     wall_boxes.append(lr_wall_boxes[1])  # 通常の内側壁
                 
-                # Y方向（上下）端のチェック
-                if y == 0 or not mask[y-1, x]:  # 上端または上が空白（外周）
+                # 次に上下方向の壁を設定
+                # 上側の壁
+                if is_top_edge:  # 上端または上が空白（外周）
                     wall_boxes.append(tb_outer_wall_boxes[0])  # 厚い外周壁
                 else:
                     wall_boxes.append(tb_wall_boxes[0])  # 通常の内側壁
-                    
-                if y == grid_size - 1 or not mask[y+1, x]:  # 下端または下が空白（外周）
+                
+                # 下側の壁
+                if is_bottom_edge:  # 下端または下が空白（外周）
                     wall_boxes.append(tb_outer_wall_boxes[1])  # 厚い外周壁
                 else:
                     wall_boxes.append(tb_wall_boxes[1])  # 通常の内側壁
@@ -183,10 +194,9 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # 壁の位置を設定する
                 positions = []
                 
-                # X方向（左右）壁の位置
-                if x == 0 or not mask[y, x-1]:  # 左端または左が空白（外周）
+                # 左側の壁の位置
+                if is_left_edge:  # 左端または左が空白（外周）
                     # 左外周壁の位置（外側に厚みを追加）
-                    # 外側の壁として、ベースの左端に合わせる
                     positions.append([
                         x0 - extend_left + (wall_thickness + out_thickness) / 2, 
                         y_center,  # ベースの中心Y座標を使用
@@ -200,9 +210,9 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         base_height + wall_height / 2
                     ])
                 
-                if x == grid_size - 1 or not mask[y, x+1]:  # 右端または右が空白（外周）
+                # 右側の壁の位置
+                if is_right_edge:  # 右端または右が空白（外周）
                     # 右外周壁の位置（外側に厚みを追加）
-                    # 外側の壁として、ベースの右端に合わせる
                     positions.append([
                         x0 + dot_size + extend_right - (wall_thickness + out_thickness) / 2,
                         y_center,
@@ -216,8 +226,8 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         base_height + wall_height / 2
                     ])
                 
-                # Y方向（上下）壁の位置
-                if y == 0 or not mask[y-1, x]:  # 上端または上が空白（外周）
+                # 上側の壁の位置
+                if is_top_edge:  # 上端または上が空白（外周）
                     # 上外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x_center,  # ベースの中心X座標を使用
@@ -232,7 +242,8 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         base_height + wall_height / 2
                     ])
                 
-                if y == grid_size - 1 or not mask[y+1, x]:  # 下端または下が空白（外周）
+                # 下側の壁の位置
+                if is_bottom_edge:  # 下端または下が空白（外周）
                     # 下外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x_center,
