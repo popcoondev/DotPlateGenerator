@@ -41,18 +41,88 @@ def normalize_colors(pixels, step):
 def map_to_closest_color(pixel, palette):
     return min(palette, key=lambda c: distance.euclidean(pixel, c))
 
-def generate_preview_image(image_path, grid_size, color_step, top_color_limit, zoom_factor=10):
-    img = Image.open(image_path).convert("RGB")
-    img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
-    pixels = np.array(img_resized).reshape(-1, 3)
-    pixels_normalized = normalize_colors(pixels, color_step)
-    colors = [tuple(c) for c in pixels_normalized]
-    color_counts = Counter(colors)
-    top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
-    pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
-    img_preview = Image.fromarray(np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3)), mode="RGB")
+def generate_preview_image(image_path, grid_size, color_step, top_color_limit, zoom_factor=10, custom_pixels=None, highlight_pos=None, hover_pos=None):
+    # 型チェックと値チェック
+    if not isinstance(grid_size, int) or grid_size <= 0:
+        raise ValueError("grid_size must be a positive integer")
+    
+    if custom_pixels is not None:
+        # カスタムピクセルデータが提供されている場合、それを使用
+        # 型チェック: カスタムピクセルがnumpy配列で、適切な形状か確認
+        if not isinstance(custom_pixels, np.ndarray) or custom_pixels.ndim != 3 or custom_pixels.shape[2] != 3:
+            raise ValueError("custom_pixels must be a 3D numpy array with shape (height, width, 3)")
+        pixels_array = custom_pixels
+    else:
+        # 画像からピクセルデータを生成
+        img = Image.open(image_path).convert("RGB")
+        img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
+        pixels = np.array(img_resized).reshape(-1, 3)
+        pixels_normalized = normalize_colors(pixels, color_step)
+        colors = [tuple(c) for c in pixels_normalized]
+        color_counts = Counter(colors)
+        top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
+        pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+        pixels_array = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
+    
+    # 透過色（黒=0,0,0）を特別処理
+    # RGBAモードで新しい画像を作成してアルファチャンネルを追加
+    img_rgba = np.zeros((pixels_array.shape[0], pixels_array.shape[1], 4), dtype=np.uint8)
+    img_rgba[:, :, :3] = pixels_array  # RGB値をコピー
+    
+    # 黒色（0,0,0）のピクセルを透明に設定
+    black_mask = (pixels_array[:, :, 0] == 0) & (pixels_array[:, :, 1] == 0) & (pixels_array[:, :, 2] == 0)
+    img_rgba[black_mask, 3] = 0  # 透明に設定
+    img_rgba[~black_mask, 3] = 255  # 非透明に設定
+    
+    # RGBA画像を作成
+    img_preview = Image.fromarray(img_rgba, mode="RGBA")
+    
+    # 透明部分が見えるように市松模様の背景を作成
+    from PIL import ImageDraw
+    checkerboard = Image.new('RGBA', (grid_size * zoom_factor, grid_size * zoom_factor), (255, 255, 255, 255))
+    pattern = Image.new('RGBA', (zoom_factor * 2, zoom_factor * 2), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(pattern)
+    draw.rectangle((0, 0, zoom_factor, zoom_factor), fill=(200, 200, 200, 255))
+    draw.rectangle((zoom_factor, zoom_factor, zoom_factor * 2, zoom_factor * 2), fill=(200, 200, 200, 255))
+    
+    # 市松模様パターンを繰り返し配置
+    for y in range(0, grid_size * zoom_factor, zoom_factor * 2):
+        for x in range(0, grid_size * zoom_factor, zoom_factor * 2):
+            checkerboard.paste(pattern, (x, y), pattern)
+    
+    # 拡大したプレビュー画像
     img_preview = img_preview.resize((grid_size * zoom_factor, grid_size * zoom_factor), resample=Image.NEAREST)
-    return img_preview
+    
+    # 市松模様の背景と合成
+    result = Image.alpha_composite(checkerboard, img_preview)
+    
+    # 共通の枠線描画関数
+    def draw_grid_highlight(grid_pos, color, width_factor=10):
+        grid_x, grid_y = grid_pos
+        # 有効なグリッド位置かチェック
+        if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
+            draw = ImageDraw.Draw(result)
+            # ドットの周りに枠線を描画
+            x0 = grid_x * zoom_factor
+            y0 = grid_y * zoom_factor
+            x1 = x0 + zoom_factor - 1
+            y1 = y0 + zoom_factor - 1
+            
+            # 枠線の太さを計算
+            line_width = max(1, zoom_factor // width_factor)
+            
+            # 四角形の枠線を描画
+            draw.rectangle([x0, y0, x1, y1], outline=color, width=line_width)
+    
+    # ホバー中のドットを薄いハイライト表示
+    if hover_pos is not None:
+        draw_grid_highlight(hover_pos, (0, 180, 255, 220), width_factor=15)  # 青色の薄い枠線
+    
+    # 選択されたドットを強調ハイライト表示
+    if highlight_pos is not None:
+        draw_grid_highlight(highlight_pos, (255, 0, 0, 255), width_factor=10)  # 赤色の枠線
+    
+    return result
 
 # -------------------------------
 # モデル生成関数
@@ -71,6 +141,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
     pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
     pixels_rounded_np = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
+    # 黒色（0,0,0）を透過色として扱い、マスクから除外する
     mask = np.array([[tuple(px) != (0, 0, 0) for px in row] for row in pixels_rounded_np]).astype(np.uint8)
     
     base_blocks = []
@@ -348,6 +419,9 @@ class DotPlateApp(QMainWindow):
         self.setWindowTitle("Dot Plate Generator")
         self.setMinimumSize(900, 700)
         
+        # ステータスバーを初期化
+        self.statusBar().showMessage("準備完了")
+        
         # メインウィジェットとレイアウト
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -388,42 +462,123 @@ class DotPlateApp(QMainWindow):
         
         class ClickableLabel(QLabel):
             clicked = pyqtSignal(int, int)  # x, y座標を返すシグナル
+            hover = pyqtSignal(int, int)    # ホバー時のx, y座標を返すシグナル
             
             def __init__(self, text):
                 super().__init__(text)
                 self.pixmap_size = None
                 self.grid_size = None
                 self.zoom_factor = None
+                self.last_clicked_pos = None  # 最後にクリックされたグリッド位置を保存
+                self.hover_grid_pos = None    # ホバー中のグリッド位置
+                self.setMouseTracking(True)   # マウスの移動を追跡
+            
+            def get_grid_position(self, pos):
+                """マウス位置からグリッド位置を計算する共通関数"""
+                if not self.pixmap() or not self.pixmap_size or not self.grid_size or not self.zoom_factor:
+                    return None
+                    
+                label_width = self.width()
+                label_height = self.height()
+                pixmap_width, pixmap_height = self.pixmap_size
+                
+                # ラベルとピクセル座標の比率を計算
+                if label_width <= 0 or label_height <= 0:
+                    return None
+                    
+                # ラベルとピクセルマップのサイズ比を計算
+                scale_x = pixmap_width / label_width
+                scale_y = pixmap_height / label_height
+                
+                # ピクセル座標に変換
+                pixel_x = int(pos.x() * scale_x)
+                pixel_y = int(pos.y() * scale_y)
+                
+                # デバッグ出力
+                # print(f"Mouse Position: {pos.x()}, {pos.y()}")
+                # print(f"Scale: {scale_x}, {scale_y}")
+                # print(f"Pixel Position: {pixel_x}, {pixel_y}")
+                
+                # グリッド座標に変換（ズームを考慮）
+                grid_x = pixel_x // self.zoom_factor
+                grid_y = pixel_y // self.zoom_factor
+                
+                # 座標の反転は行わない - on_preview_clicked などのハンドラ側で行う
+                
+                # グリッドサイズの範囲内かチェック
+                if 0 <= grid_x < self.grid_size and 0 <= grid_y < self.grid_size:
+                    # print(f"Grid Position: {grid_x}, {grid_y}")
+                    return (grid_x, grid_y)
+                return None
+            
+            def mouseMoveEvent(self, event):
+                """マウス移動時のイベントハンドラ - ホバー効果を提供"""
+                grid_pos = self.get_grid_position(event.pos())
+                if grid_pos:
+                    # 前回のホバー位置と異なる場合のみシグナル発信
+                    if grid_pos != self.hover_grid_pos:
+                        self.hover_grid_pos = grid_pos
+                        self.hover.emit(grid_pos[0], grid_pos[1])
+                        # ツールチップでグリッド位置を表示
+                        QToolTip.showText(event.globalPos(), f"位置: [{grid_pos[0]}, {grid_pos[1]}]", self)
+                super().mouseMoveEvent(event)
             
             def mousePressEvent(self, event):
-                if self.pixmap() and self.pixmap_size:
-                    # クリック位置をピクセル座標に変換
-                    pos = event.pos()
-                    label_width = self.width()
-                    label_height = self.height()
-                    pixmap_width, pixmap_height = self.pixmap_size
+                """マウスクリック時のイベントハンドラ"""
+                grid_pos = self.get_grid_position(event.pos())
+                if grid_pos:
+                    grid_x, grid_y = grid_pos
+                    # デバッグ出力
+                    print(f"Label Size: {self.width()}x{self.height()}")
+                    print(f"Pixmap Size: {self.pixmap_size}")
+                    print(f"Click Position: {event.pos().x()}, {event.pos().y()}")
+                    print(f"Grid Position: {grid_x}, {grid_y}")
                     
-                    # ラベルとピクセル座標の比率を計算
-                    scale_x = pixmap_width / label_width if label_width else 1
-                    scale_y = pixmap_height / label_height if label_height else 1
-                    
-                    # ピクセル座標に変換
-                    pixel_x = int(pos.x() * scale_x)
-                    pixel_y = int(pos.y() * scale_y)
-                    
-                    # グリッド座標に変換（ズームを考慮）
-                    if self.grid_size and self.zoom_factor:
-                        grid_x = pixel_x // self.zoom_factor
-                        grid_y = pixel_y // self.zoom_factor
-                        
-                        # グリッドサイズの範囲内かチェック
-                        if 0 <= grid_x < self.grid_size and 0 <= grid_y < self.grid_size:
-                            self.clicked.emit(grid_x, grid_y)
+                    # 最後にクリックした位置を保存
+                    self.last_clicked_pos = grid_pos
+                    # クリックがグリッド内の有効な位置にある場合にシグナルを発信
+                    self.clicked.emit(grid_x, grid_y)
         
         # 減色後画像表示エリア
         reduced_area = QVBoxLayout()
+        
+        # ドット編集用ツールバー
+        edit_toolbar = QHBoxLayout()
+        
+        # 元に戻す（Undo）ボタン
+        undo_btn = QPushButton("↩ 元に戻す")
+        undo_btn.setToolTip("直前の編集を元に戻す")
+        undo_btn.clicked.connect(self.undo_edit)
+        
+        # やり直し（Redo）ボタン
+        redo_btn = QPushButton("↪ やり直し")
+        redo_btn.setToolTip("元に戻した編集をやり直す")
+        redo_btn.clicked.connect(self.redo_edit)
+        
+        # ツールバーにボタンを追加
+        edit_toolbar.addWidget(undo_btn)
+        edit_toolbar.addWidget(redo_btn)
+        
+        # ドット画像ラベル
         reduced_label = QLabel("減色後のドット画像（クリックで色を変更）")
         reduced_label.setAlignment(Qt.AlignCenter)
+        
+        # 操作方法説明用のツールチップ
+        info_label = QLabel("ℹ️ 編集方法")
+        info_label.setToolTip(
+            "ドット編集方法:\n"
+            "・ドットをクリック: 色の変更や透明化ができます\n"
+            "・透明にする: 黒色(0,0,0)として処理されます\n"
+            "・元に戻す/やり直し: 編集履歴の操作が可能です\n"
+            "・選択中のドット: 赤色の枠線でハイライト表示されます"
+        )
+        info_label.setAlignment(Qt.AlignCenter)
+        info_label.setStyleSheet("color: blue; text-decoration: underline;")
+        
+        # ツールバーとラベルをレイアウトに追加
+        reduced_area.addLayout(edit_toolbar)
+        reduced_area.addWidget(reduced_label)
+        reduced_area.addWidget(info_label)
         
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
@@ -435,12 +590,11 @@ class DotPlateApp(QMainWindow):
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        # クリックシグナルを接続
+        # クリックシグナルとホバーシグナルを接続
         self.preview_label.clicked.connect(self.on_preview_clicked)
+        self.preview_label.hover.connect(self.on_preview_hover)
         
         self.preview_scroll.setWidget(self.preview_label)
-        
-        reduced_area.addWidget(reduced_label)
         reduced_area.addWidget(self.preview_scroll)
         
         # 両方の画像エリアを水平に並べる
@@ -614,6 +768,11 @@ class DotPlateApp(QMainWindow):
         # ドット編集用の変数
         self.current_grid_size = 32  # デフォルト値
         self.pixels_rounded_np = None  # 減色後の画像データ
+        
+        # 元に戻す（undo）機能のための履歴
+        self.edit_history = []  # ピクセルデータの履歴
+        self.history_position = -1  # 現在の履歴位置
+        self.pixels_rounded_np = None  # 初期化
     
     def show_parameter_help(self, parameter_name):
         dialog = ParameterHelpDialog(parameter_name, self)
@@ -630,23 +789,340 @@ class DotPlateApp(QMainWindow):
             self.wall_color = color
             self.set_button_color(self.wall_color_button, color)
             
+    def on_preview_hover(self, grid_x, grid_y):
+        """ドット上をマウスがホバーした時の処理"""
+        if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
+            return
+            
+        # NumPy配列は[row, col]=[y, x]の順でアクセス
+        # クリック座標(x,y)を入れ替えて[y,x]の順でアクセスする
+        array_y = grid_y  # Y軸は反転しない
+        array_x = grid_x  # X軸はそのまま
+        
+        try:
+            # ホバー位置のドットの色を取得 - numpy配列は[y, x]の順
+            current_color = self.pixels_rounded_np[array_y, array_x]
+            is_transparent = tuple(current_color) == (0, 0, 0)
+            
+            # ステータス表示文字列
+            color_str = "透明" if is_transparent else f"RGB({current_color[0]}, {current_color[1]}, {current_color[2]})"
+            self.statusBar().showMessage(f"位置(x,y): [{grid_x}, {grid_y}] → 配列位置[行,列]=[{array_y}, {array_x}] 色: {color_str}")
+            
+            # ホバー表示でプレビューを更新
+            self.update_hover_preview(grid_x, grid_y)
+        except Exception as e:
+            print(f"ホバー処理エラー: {str(e)}")
+    
+    def update_hover_preview(self, hover_x, hover_y):
+        """ホバー位置のハイライトだけを更新"""
+        # 表示更新の負荷を下げるため、常にフル更新せず軽量更新する
+        params = {key: spin.value() for key, spin in self.controls.items()}
+        
+        try:
+            # 最後にクリックされた位置があれば取得
+            highlight_pos = None
+            if hasattr(self.preview_label, 'last_clicked_pos') and self.preview_label.last_clicked_pos is not None:
+                highlight_pos = self.preview_label.last_clicked_pos
+                
+            # ホバー位置
+            hover_pos = (hover_x, hover_y)
+            
+            # 軽量なプレビュー更新（既存のピクセルデータを使用）
+            preview_img = generate_preview_image(
+                self.image_path,
+                self.current_grid_size,
+                int(params["Color Step"]),
+                int(params["Top Colors"]),
+                self.zoom_factor,
+                custom_pixels=self.pixels_rounded_np,
+                highlight_pos=highlight_pos,
+                hover_pos=hover_pos
+            )
+            
+            # プレビュー画像を更新（QPixmapに変換）
+            preview_buffer = BytesIO()
+            preview_img.save(preview_buffer, format="PNG")
+            preview_qimg = QImage()
+            preview_qimg.loadFromData(preview_buffer.getvalue())
+            preview_pixmap = QPixmap.fromImage(preview_qimg)
+            
+            # ラベルに表示
+            self.preview_label.setPixmap(preview_pixmap)
+        except Exception as e:
+            print(f"ホバープレビュー更新エラー: {str(e)}")
+    
     def on_preview_clicked(self, grid_x, grid_y):
         """減色後のプレビュー画像内のドットがクリックされたときの処理"""
         if self.pixels_rounded_np is None:
             return
-            
-        # 既存の色を取得
-        current_color = self.pixels_rounded_np[grid_y, grid_x]
-        rgb_color = QColor(current_color[0], current_color[1], current_color[2])
         
-        # 色選択ダイアログを表示
-        new_color = QColorDialog.getColor(rgb_color, self, "ドットの色を選択")
-        if new_color.isValid():
-            # ピクセルの色を更新
-            self.pixels_rounded_np[grid_y, grid_x] = [new_color.red(), new_color.green(), new_color.blue()]
+        # デバッグ情報
+        print(f"ドットクリック: grid_x={grid_x}, grid_y={grid_y}")
+        
+        # 型チェック: pixels_rounded_npが正しくnumpy配列であることを確認
+        if not isinstance(self.pixels_rounded_np, np.ndarray):
+            print(f"エラー: pixels_rounded_npが正しいnumpy配列ではありません: {type(self.pixels_rounded_np)}")
+            return
             
-            # プレビューを更新（編集したピクセルデータを使用）
+        print(f"pixels_rounded_np.shape = {self.pixels_rounded_np.shape}")
+        
+        # ピクセル配列の中身をテスト表示
+        grid_height = self.pixels_rounded_np.shape[0]
+        print(f"グリッド高さ: {grid_height}")
+        
+        # 座標変換前の位置の色を確認
+        try:
+            # 反転前
+            orig_color = self.pixels_rounded_np[grid_y, grid_x]
+            print(f"変換前座標[{grid_y}, {grid_x}]の色: RGB({orig_color[0]}, {orig_color[1]}, {orig_color[2]})")
+        except IndexError:
+            print(f"変換前座標[{grid_y}, {grid_x}]はインデックス範囲外です")
+            
+        # グリッド座標の調整（表示上の座標からピクセル配列の座標に変換）
+        # 重要: Y座標を反転するのは、配列と表示が上下逆の場合のみ
+        array_y = grid_y  # まずは反転せず試す
+        array_x = grid_x  # X軸は調整不要の可能性が高い
+        
+        # 反転後の座標も表示（デバッグ用）
+        print(f"変換後配列座標: array_x={array_x}, array_y={array_y}")
+        
+        try:
+            # 本質的な問題: PILやUIの座標系とNumPy配列のインデックスには2つの違いがある
+            # 1. UI/画像では (x, y) の順だが、NumPy配列では [row, col] = [y, x] の順
+            # 2. PILやQtのY軸は上から下、配列でも同様に上から下の行インデックスが増える
+            
+            # 座標変換方法:
+            # 1. x,y を入れ替えずに配列にアクセス
+            # 2. Y軸反転は必要ない (UIと配列の座標系が同じ向き)
+            
+            # 正しい配列アクセス - [grid_y, grid_x] でアクセス
+            # つまり、クリック位置(16, 18)なら配列[18, 16]にアクセスする
+            array_y = grid_y  # Y軸は反転しない
+            array_x = grid_x  # X軸はそのまま
+            
+            # 座標変換と色の確認 (デバッグ用)
+            print(f"クリック位置(x,y): ({grid_x}, {grid_y})")
+            print(f"配列アクセス[row,col]=[y,x]: [{array_y}, {array_x}]")
+            
+            # 配列は[row, column]=[y, x]の順でアクセス
+            try:
+                # まず正しいと思われる順序でアクセス
+                current_color = self.pixels_rounded_np[array_y, array_x]
+                print(f"配列[{array_y}, {array_x}]の色: RGB({current_color[0]}, {current_color[1]}, {current_color[2]})")
+            except IndexError:
+                print(f"配列[{array_y}, {array_x}]はインデックス範囲外です")
+                
+            # X,Yを入れ替えてアクセスしてみる (デバッグ用)
+            try:
+                swapped_color = self.pixels_rounded_np[array_x, array_y]
+                print(f"配列[{array_x}, {array_y}](x,y順)の色: RGB({swapped_color[0]}, {swapped_color[1]}, {swapped_color[2]})")
+            except IndexError:
+                print(f"配列[{array_x}, {array_y}]はインデックス範囲外です")
+                
+            # 選択したドットの色をQColorに変換
+            rgb_color = QColor(current_color[0], current_color[1], current_color[2])
+        
+        except IndexError as e:
+            print(f"座標変換エラー: {e}")
+            return
+        
+        # 色選択オプションを作成
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("ドットの色を選択")
+        layout = QVBoxLayout(dialog)
+        
+        # 透過色（透明）オプション
+        transparent_check = QCheckBox("透過色（透明）に設定")
+        is_transparent = tuple(current_color) == (0, 0, 0)  # 黒色（0,0,0）を透過色として扱う
+        transparent_check.setChecked(is_transparent)
+        layout.addWidget(transparent_check)
+        
+        # 色選択ダイアログボタン
+        color_btn = QPushButton("色を選択")
+        color_btn.clicked.connect(lambda: self.show_color_dialog(rgb_color, grid_x, grid_y, dialog, transparent_check))
+        
+        # 透明にするボタン
+        transparent_btn = QPushButton("透明にする")
+        transparent_btn.clicked.connect(lambda: self.set_transparent_color(grid_x, grid_y, dialog))
+        
+        # キャンセルボタン
+        cancel_btn = QPushButton("キャンセル")
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        # ボタンレイアウト
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(color_btn)
+        btn_layout.addWidget(transparent_btn)
+        btn_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # ダイアログを表示
+        dialog.exec_()
+        
+    def show_color_dialog(self, current_color, grid_x, grid_y, parent_dialog, transparent_check):
+        """色選択ダイアログを表示"""
+        if self.pixels_rounded_np is None:
+            print("エラー: pixels_rounded_np がNoneです")
+            parent_dialog.reject()
+            return
+            
+        # 型チェック: pixels_rounded_npが正しくnumpy配列であることを確認
+        if not isinstance(self.pixels_rounded_np, np.ndarray):
+            print(f"エラー: pixels_rounded_npが正しいnumpy配列ではありません: {type(self.pixels_rounded_np)}")
+            parent_dialog.reject()
+            return
+            
+        color_dialog = QColorDialog(self)
+        color_dialog.setCurrentColor(current_color)
+        color_dialog.setOption(QColorDialog.ShowAlphaChannel, True)
+        
+        if color_dialog.exec_():
+            new_color = color_dialog.selectedColor()
+            if new_color.isValid():
+                try:
+                    # 編集前の状態を履歴に保存
+                    self.save_edit_history()
+                    
+                    # 透過色チェックがある場合は外す
+                    transparent_check.setChecked(False)
+                    
+                    # NumPy配列は[row, col]=[y, x]の順でアクセス
+                    # クリック座標(x,y)を入れ替えて[y,x]の順でアクセスする
+                    array_y = grid_y  # Y軸は反転しない
+                    array_x = grid_x  # X軸はそのまま
+                    
+                    print(f"色変更: クリック位置(x,y)=({grid_x}, {grid_y}) → 配列アクセス[y,x]=[{array_y}, {array_x}]")
+                    
+                    # 新しい色の確認
+                    new_rgb = [new_color.red(), new_color.green(), new_color.blue()]
+                    print(f"新しい色: RGB({new_rgb[0]}, {new_rgb[1]}, {new_rgb[2]})")
+                    print(f"更新座標: np配列[{array_y}, {array_x}] (行,列=[y,x]順)")
+                    
+                    # ピクセルの色を更新 - numpy配列は[row, column] = [y, x]の順でアクセス
+                    # つまり、クリック位置(16, 18)なら配列[18, 16]にアクセスする
+                    self.pixels_rounded_np[array_y, array_x] = new_rgb
+                    
+                    # プレビューを更新（編集したピクセルデータを使用）
+                    self.update_preview(custom_pixels=self.pixels_rounded_np)
+                    
+                    # 親ダイアログを閉じる
+                    parent_dialog.accept()
+                except Exception as e:
+                    print(f"色設定エラー: {str(e)}")
+                    parent_dialog.reject()
+                
+    def set_transparent_color(self, grid_x, grid_y, dialog):
+        """ドットを透明（黒色=0,0,0）に設定"""
+        if self.pixels_rounded_np is None:
+            print("エラー: pixels_rounded_np がNoneです")
+            dialog.reject()
+            return
+            
+        # 型チェック: pixels_rounded_npが正しくnumpy配列であることを確認
+        if not isinstance(self.pixels_rounded_np, np.ndarray):
+            print(f"エラー: pixels_rounded_npが正しいnumpy配列ではありません: {type(self.pixels_rounded_np)}")
+            dialog.reject()
+            return
+        
+        # 編集前の状態を履歴に保存
+        self.save_edit_history()
+        
+        # NumPy配列は[row, col]=[y, x]の順でアクセス
+        # クリック座標(x,y)を入れ替えて[y,x]の順でアクセスする
+        array_y = grid_y  # Y軸は反転しない
+        array_x = grid_x  # X軸はそのまま
+        
+        print(f"透明化: クリック位置(x,y)=({grid_x}, {grid_y}) → 配列アクセス[y,x]=[{array_y}, {array_x}]")
+            
+        try:
+            # 透過色を黒（0,0,0）として扱う
+            print(f"透明化座標: np配列[{array_y}, {array_x}] (行,列=[y,x]順)")
+            self.pixels_rounded_np[array_y, array_x] = [0, 0, 0]
+            
+            # プレビューを更新
             self.update_preview(custom_pixels=self.pixels_rounded_np)
+            
+            # ダイアログを閉じる
+            dialog.accept()
+        except Exception as e:
+            print(f"透明色設定エラー: {str(e)}")
+            dialog.reject()
+        
+    def save_edit_history(self):
+        """現在のピクセルデータを履歴に保存"""
+        if self.pixels_rounded_np is None:
+            print("警告: 履歴保存に失敗 - pixels_rounded_npがNoneです")
+            return
+            
+        # 型チェック
+        if not isinstance(self.pixels_rounded_np, np.ndarray):
+            print(f"警告: 履歴保存に失敗 - pixels_rounded_npが正しいnumpy配列ではありません: {type(self.pixels_rounded_np)}")
+            return
+            
+        try:
+            # 履歴が空でない場合は、現在の位置以降の履歴を削除
+            if self.history_position < len(self.edit_history) - 1:
+                self.edit_history = self.edit_history[:self.history_position + 1]
+                
+            # 現在のピクセルデータのコピーを作成して履歴に追加
+            self.edit_history.append(self.pixels_rounded_np.copy())
+            self.history_position = len(self.edit_history) - 1
+            print(f"履歴保存: 位置 {self.history_position}, 履歴数 {len(self.edit_history)}")
+        except Exception as e:
+            print(f"履歴保存エラー: {str(e)}")
+        
+    def undo_edit(self):
+        """直前の編集を元に戻す"""
+        try:
+            if not hasattr(self, 'edit_history') or not self.edit_history:
+                print("履歴がありません")
+                return
+                
+            if self.history_position <= 0:
+                print("これ以上戻れる履歴がありません")
+                return
+                
+            # 一つ前の履歴に戻る
+            self.history_position -= 1
+            print(f"Undo: 履歴位置 {self.history_position + 1} → {self.history_position}")
+            
+            if self.history_position < len(self.edit_history):
+                self.pixels_rounded_np = self.edit_history[self.history_position].copy()
+                
+                # プレビューを更新
+                self.update_preview(custom_pixels=self.pixels_rounded_np)
+            else:
+                print(f"エラー: 無効な履歴位置 {self.history_position}, 履歴数: {len(self.edit_history)}")
+        except Exception as e:
+            print(f"Undoエラー: {str(e)}")
+        
+    def redo_edit(self):
+        """元に戻した編集をやり直す"""
+        try:
+            if not hasattr(self, 'edit_history') or not self.edit_history:
+                print("履歴がありません")
+                return
+                
+            if self.history_position >= len(self.edit_history) - 1:
+                print("これ以上進める履歴がありません")
+                return
+                
+            # 次の履歴に進む
+            self.history_position += 1
+            print(f"Redo: 履歴位置 {self.history_position - 1} → {self.history_position}")
+            
+            if 0 <= self.history_position < len(self.edit_history):
+                self.pixels_rounded_np = self.edit_history[self.history_position].copy()
+                
+                # プレビューを更新
+                self.update_preview(custom_pixels=self.pixels_rounded_np)
+            else:
+                print(f"エラー: 無効な履歴位置 {self.history_position}, 履歴数: {len(self.edit_history)}")
+        except Exception as e:
+            print(f"Redoエラー: {str(e)}")
             
     def event(self, event):
         """カスタムイベントの処理"""
@@ -679,10 +1155,13 @@ class DotPlateApp(QMainWindow):
         return super().event(event)
     
     def select_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "画像を開く", "", "画像ファイル (*.png *.jpg *.jpeg)")
+        path, _ = QFileDialog.getOpenFileName(self, "画像を開く", "", "画像ファイル (*.png *.jpg *.jpeg *.gif)")
         if path:
             self.image_path = path
             self.input_label.setText(path)
+            # 新しい画像を選択したらハイライトをクリア
+            if hasattr(self.preview_label, 'last_clicked_pos'):
+                self.preview_label.last_clicked_pos = None
             self.update_preview()
     
     def update_preview(self, custom_pixels=None):
@@ -690,82 +1169,136 @@ class DotPlateApp(QMainWindow):
         if not self.image_path:
             return
         
-        self.zoom_factor = self.zoom_slider.value()
-        params = {key: spin.value() for key, spin in self.controls.items()}
-        
-        # 現在のグリッドサイズを保存
-        self.current_grid_size = int(params["Grid Size"])
-        
-        # オリジナル画像の表示
-        original_img = Image.open(self.image_path)
-        
-        # GIF画像の場合は最初のフレームを取得
-        if hasattr(original_img, 'format') and original_img.format == 'GIF' and 'duration' in original_img.info:
-            # アニメーションGIFの場合
-            original_img = original_img.convert('RGBA')  # 透明部分を適切に処理
-        
-        # 画像が大きすぎる場合はリサイズ
-        max_display_size = 500
-        if max(original_img.width, original_img.height) > max_display_size:
-            # アスペクト比を維持しながらリサイズ
-            ratio = max_display_size / max(original_img.width, original_img.height)
-            new_size = (int(original_img.width * ratio), int(original_img.height * ratio))
-            original_img = original_img.resize(new_size, Image.LANCZOS)
-        
-        # オリジナル画像をQPixmapに変換して表示
-        original_buffer = BytesIO()
-        original_img.save(original_buffer, format="PNG")
-        original_qimg = QImage()
-        original_qimg.loadFromData(original_buffer.getvalue())
-        original_pixmap = QPixmap.fromImage(original_qimg)
-        
-        self.original_image_label.setPixmap(original_pixmap)
-        self.original_image_label.adjustSize()
-        
-        # 減色後の画像を生成または更新
-        if custom_pixels is not None:
-            # カスタムピクセルデータ（編集済み）を使用
-            self.pixels_rounded_np = custom_pixels
-            preview_img = Image.fromarray(self.pixels_rounded_np, mode="RGB")
-            preview_img = preview_img.resize((self.current_grid_size * self.zoom_factor, 
-                                             self.current_grid_size * self.zoom_factor), 
-                                            resample=Image.NEAREST)
-        else:
-            # 新たに画像を生成
-            preview_img = generate_preview_image(
-                self.image_path,
-                self.current_grid_size,
-                int(params["Color Step"]),
-                int(params["Top Colors"]),
-                self.zoom_factor
-            )
+        try:
+            self.zoom_factor = self.zoom_slider.value()
+            params = {key: spin.value() for key, spin in self.controls.items()}
             
-            # ピクセルデータを保存（後でドット編集時に使用）
-            img_resized = Image.open(self.image_path).convert("RGB").resize(
-                (self.current_grid_size, self.current_grid_size), resample=Image.NEAREST)
-            pixels = np.array(img_resized).reshape(-1, 3)
-            pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
-            colors = [tuple(c) for c in pixels_normalized]
-            color_counts = Counter(colors)
-            top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
-            pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
-            self.pixels_rounded_np = np.array(pixels_rounded, dtype=np.uint8).reshape(
-                (self.current_grid_size, self.current_grid_size, 3))
-        
-        # プレビュー画像をQPixmapに変換して表示
-        preview_buffer = BytesIO()
-        preview_img.save(preview_buffer, format="PNG")
-        preview_qimg = QImage()
-        preview_qimg.loadFromData(preview_buffer.getvalue())
-        preview_pixmap = QPixmap.fromImage(preview_qimg)
-        
-        # クリックイベント用にピクセルサイズ情報を設定
-        self.preview_label.pixmap_size = (preview_pixmap.width(), preview_pixmap.height())
-        self.preview_label.grid_size = self.current_grid_size
-        self.preview_label.zoom_factor = self.zoom_factor
-        
-        self.preview_label.setPixmap(preview_pixmap)
-        self.preview_label.adjustSize()
+            # 現在のグリッドサイズを保存
+            self.current_grid_size = int(params["Grid Size"])
+            
+            # オリジナル画像の表示
+            original_img = Image.open(self.image_path)
+            
+            # GIF画像の場合は最初のフレームを取得
+            if hasattr(original_img, 'format') and original_img.format == 'GIF' and 'duration' in original_img.info:
+                # アニメーションGIFの場合
+                original_img = original_img.convert('RGBA')  # 透明部分を適切に処理
+            
+            # 画像が大きすぎる場合はリサイズ
+            max_display_size = 500
+            if max(original_img.width, original_img.height) > max_display_size:
+                # アスペクト比を維持しながらリサイズ
+                ratio = max_display_size / max(original_img.width, original_img.height)
+                new_size = (int(original_img.width * ratio), int(original_img.height * ratio))
+                original_img = original_img.resize(new_size, Image.LANCZOS)
+            
+            # オリジナル画像をQPixmapに変換して表示
+            original_buffer = BytesIO()
+            original_img.save(original_buffer, format="PNG")
+            original_qimg = QImage()
+            original_qimg.loadFromData(original_buffer.getvalue())
+            original_pixmap = QPixmap.fromImage(original_qimg)
+            
+            self.original_image_label.setPixmap(original_pixmap)
+            self.original_image_label.adjustSize()
+            
+            # 最後にクリックされた位置があれば取得
+            highlight_pos = None
+            if hasattr(self.preview_label, 'last_clicked_pos') and self.preview_label.last_clicked_pos is not None:
+                highlight_pos = self.preview_label.last_clicked_pos
+                
+            # ホバー位置の取得
+            hover_pos = None
+            if hasattr(self.preview_label, 'hover_grid_pos') and self.preview_label.hover_grid_pos is not None:
+                hover_pos = self.preview_label.hover_grid_pos
+            
+            # 減色後の画像を生成または更新
+            try:
+                if custom_pixels is not None:
+                    # カスタムピクセルデータ（編集済み）を使用
+                    self.pixels_rounded_np = custom_pixels
+                    preview_img = generate_preview_image(
+                        self.image_path,
+                        self.current_grid_size,
+                        int(params["Color Step"]),
+                        int(params["Top Colors"]),
+                        self.zoom_factor,
+                        custom_pixels=self.pixels_rounded_np,
+                        highlight_pos=highlight_pos,  # ハイライト位置を渡す
+                        hover_pos=hover_pos  # ホバー位置を渡す
+                    )
+                else:
+                    # 新たに画像を生成
+                    preview_img = generate_preview_image(
+                        self.image_path,
+                        self.current_grid_size,
+                        int(params["Color Step"]),
+                        int(params["Top Colors"]),
+                        self.zoom_factor,
+                        highlight_pos=highlight_pos,  # ハイライト位置を渡す
+                        hover_pos=hover_pos  # ホバー位置を渡す
+                    )
+            except Exception as e:
+                # エラーが発生した場合、カスタムピクセルを無視して再試行
+                print(f"プレビュー生成エラー: {str(e)}、カスタムピクセルなしで再試行します")
+                preview_img = generate_preview_image(
+                    self.image_path,
+                    self.current_grid_size,
+                    int(params["Color Step"]),
+                    int(params["Top Colors"]),
+                    self.zoom_factor
+                )
+            
+            # カスタムピクセルを使用していない場合のみ、ピクセルデータを生成
+            if custom_pixels is None:
+                try:
+                    # ピクセルデータを保存（後でドット編集時に使用）
+                    img_resized = Image.open(self.image_path).convert("RGB").resize(
+                        (self.current_grid_size, self.current_grid_size), resample=Image.NEAREST)
+                    pixels = np.array(img_resized).reshape(-1, 3)
+                    pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
+                    colors = [tuple(c) for c in pixels_normalized]
+                    color_counts = Counter(colors)
+                    top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
+                    pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+                    
+                    # 適切な形状のnumpy配列に変換
+                    pixels_array = np.array(pixels_rounded, dtype=np.uint8)
+                    self.pixels_rounded_np = pixels_array.reshape((self.current_grid_size, self.current_grid_size, 3))
+                    
+                    # デバッグのために型と形状を確認
+                    print(f"生成されたpixels_rounded_np の型: {type(self.pixels_rounded_np)}")
+                    print(f"生成されたpixels_rounded_np の形状: {self.pixels_rounded_np.shape}")
+                        
+                    # 初期状態を履歴に追加（元に戻す機能のため）
+                    self.edit_history = [self.pixels_rounded_np.copy()]
+                    self.history_position = 0
+                except Exception as e:
+                    print(f"ピクセルデータ生成エラー: {str(e)}")
+                    return
+            
+            # プレビュー画像をQPixmapに変換して表示
+            try:
+                preview_buffer = BytesIO()
+                preview_img.save(preview_buffer, format="PNG")
+                preview_qimg = QImage()
+                preview_qimg.loadFromData(preview_buffer.getvalue())
+                preview_pixmap = QPixmap.fromImage(preview_qimg)
+                
+                # クリックイベント用にピクセルサイズ情報を設定
+                self.preview_label.pixmap_size = (preview_pixmap.width(), preview_pixmap.height())
+                self.preview_label.grid_size = self.current_grid_size
+                self.preview_label.zoom_factor = self.zoom_factor
+                
+                self.preview_label.setPixmap(preview_pixmap)
+                self.preview_label.adjustSize()
+            except Exception as e:
+                print(f"プレビュー表示エラー: {str(e)}")
+                self.input_label.setText(f"プレビュー表示エラー: {str(e)}")
+                
+        except Exception as e:
+            print(f"update_preview全体エラー: {str(e)}")
+            self.input_label.setText(f"画像表示エラー: {str(e)}")
     
     def export_stl(self):
         if not self.image_path:
@@ -784,21 +1317,57 @@ class DotPlateApp(QMainWindow):
                 # 壁の色をRGBタプルに変換
                 wall_color = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
                 
+                # カスタム編集されたピクセルデータがあるかチェック
+                custom_pixels = self.pixels_rounded_np if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None else None
+                
                 # メッシュ生成（メッシュも返すように指定）
-                mesh = generate_dot_plate_stl(
-                    self.image_path,
-                    out_path,
-                    int(params["Grid Size"]),
-                    float(params["Dot Size"]),
-                    float(params["Wall Thickness"]),
-                    float(params["Wall Height"]),
-                    float(params["Base Height"]),
-                    int(params["Color Step"]),
-                    int(params["Top Colors"]),
-                    float(params["Out Thickness"]),
-                    wall_color=wall_color,  # 選択した壁の色を使用
-                    return_colors=True  # メッシュを返すように指定
-                )
+                if custom_pixels is not None:
+                    # カスタムピクセルからSTLを直接生成
+                    from PIL import Image
+                    import tempfile
+                    
+                    # 一時ファイルに画像を保存
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                        tmp_path = tmp.name
+                        # カスタムピクセルデータから画像を作成
+                        custom_img = Image.fromarray(custom_pixels, mode='RGB')
+                        custom_img.save(tmp_path)
+                    
+                    # 生成された一時画像を使用してSTLを生成
+                    mesh = generate_dot_plate_stl(
+                        tmp_path,  # 一時画像パス
+                        out_path,
+                        int(params["Grid Size"]),
+                        float(params["Dot Size"]),
+                        float(params["Wall Thickness"]),
+                        float(params["Wall Height"]),
+                        float(params["Base Height"]),
+                        1,  # 色ステップは1（既に減色済み）
+                        1000,  # 上位色制限は高く設定（全ての色を使用）
+                        float(params["Out Thickness"]),
+                        wall_color=wall_color,  # 選択した壁の色を使用
+                        return_colors=True  # メッシュを返すように指定
+                    )
+                    
+                    # 一時ファイルを削除
+                    import os
+                    os.unlink(tmp_path)
+                else:
+                    # 元の画像から新たにSTLを生成
+                    mesh = generate_dot_plate_stl(
+                        self.image_path,
+                        out_path,
+                        int(params["Grid Size"]),
+                        float(params["Dot Size"]),
+                        float(params["Wall Thickness"]),
+                        float(params["Wall Height"]),
+                        float(params["Base Height"]),
+                        int(params["Color Step"]),
+                        int(params["Top Colors"]),
+                        float(params["Out Thickness"]),
+                        wall_color=wall_color,  # 選択した壁の色を使用
+                        return_colors=True  # メッシュを返すように指定
+                    )
                 
                 # メッシュオブジェクトを取得
                 if isinstance(mesh, tuple) and len(mesh) > 0:
