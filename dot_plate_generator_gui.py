@@ -546,12 +546,12 @@ class DotPlateApp(QMainWindow):
         edit_toolbar = QHBoxLayout()
         
         # 元に戻す（Undo）ボタン
-        undo_btn = QPushButton("↩ 元に戻す")
+        undo_btn = QPushButton("元に戻す")
         undo_btn.setToolTip("直前の編集を元に戻す")
         undo_btn.clicked.connect(self.undo_edit)
         
         # やり直し（Redo）ボタン
-        redo_btn = QPushButton("↪ やり直し")
+        redo_btn = QPushButton("やり直し")
         redo_btn.setToolTip("元に戻した編集をやり直す")
         redo_btn.clicked.connect(self.redo_edit)
         
@@ -564,7 +564,7 @@ class DotPlateApp(QMainWindow):
         reduced_label.setAlignment(Qt.AlignCenter)
         
         # 操作方法説明用のツールチップ
-        info_label = QLabel("ℹ️ 編集方法")
+        info_label = QLabel("編集方法")
         info_label.setToolTip(
             "ドット編集方法:\n"
             "・ドットをクリック: 色の変更や透明化ができます\n"
@@ -1555,20 +1555,13 @@ class DotPlateApp(QMainWindow):
         """別スレッドで正面からの画像と上面からの画像を保存"""
         try:
             timestamp = int(time.time())
-            front_filename = f"stl_front_view_{timestamp}.png"
             top_filename = f"stl_top_view_{timestamp}.png"
-            
-            front_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), front_filename)
             top_save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), top_filename)
             
             if VEDO_AVAILABLE:
-                # Vedoを使って正面からの画像を保存
-                self._save_front_view_vedo(mesh, front_save_path, front_filename)
                 # Vedoを使って上面からの画像を保存
                 self._save_top_view_vedo(mesh, top_save_path, top_filename)
             else:
-                # Matplotlibで保存
-                self._save_front_view_matplotlib(mesh, front_save_path, front_filename)
                 # Matplotlibで上面からの画像を保存
                 self._save_top_view_matplotlib(mesh, top_save_path, top_filename)
             
