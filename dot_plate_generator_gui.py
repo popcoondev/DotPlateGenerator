@@ -472,12 +472,19 @@ class DotPlateApp(QMainWindow):
         original_area.addWidget(original_label)
         original_area.addWidget(self.original_scroll)
         
+        # ペイントツール用の変数
+        self.current_paint_color = QColor(255, 0, 0)  # デフォルト色：赤
+        self.is_paint_mode = True      # ペイントモード（True）または選択モード（False）
+        self.is_bucket_mode = False    # 塗りつぶしモード
+        
         # クリック可能なカスタムラベルの定義
         from PyQt5.QtCore import pyqtSignal
         
         class ClickableLabel(QLabel):
             clicked = pyqtSignal(int, int)  # x, y座標を返すシグナル
             hover = pyqtSignal(int, int)    # ホバー時のx, y座標を返すシグナル
+            dragPaint = pyqtSignal(int, int)  # ドラッグ中のペイント用シグナル
+            mouseWheel = pyqtSignal(int)      # マウスホイール用シグナル（ズーム用）
             
             def __init__(self, text):
                 super().__init__(text)
@@ -487,6 +494,8 @@ class DotPlateApp(QMainWindow):
                 self.last_clicked_pos = None  # 最後にクリックされたグリッド位置を保存
                 self.hover_grid_pos = None    # ホバー中のグリッド位置
                 self.setMouseTracking(True)   # マウスの移動を追跡
+                self.is_dragging = False      # ドラッグ状態の追跡
+                self.setFocusPolicy(Qt.StrongFocus)  # キーボードフォーカスを受け取れるように
             
             def get_grid_position(self, pos):
                 """マウス位置からグリッド位置を計算する共通関数"""
@@ -509,56 +518,106 @@ class DotPlateApp(QMainWindow):
                 pixel_x = int(pos.x() * scale_x)
                 pixel_y = int(pos.y() * scale_y)
                 
-                # デバッグ出力
-                # print(f"Mouse Position: {pos.x()}, {pos.y()}")
-                # print(f"Scale: {scale_x}, {scale_y}")
-                # print(f"Pixel Position: {pixel_x}, {pixel_y}")
-                
                 # グリッド座標に変換（ズームを考慮）
                 grid_x = pixel_x // self.zoom_factor
                 grid_y = pixel_y // self.zoom_factor
                 
-                # 座標の反転は行わない - on_preview_clicked などのハンドラ側で行う
-                
                 # グリッドサイズの範囲内かチェック
                 if 0 <= grid_x < self.grid_size and 0 <= grid_y < self.grid_size:
-                    # print(f"Grid Position: {grid_x}, {grid_y}")
                     return (grid_x, grid_y)
                 return None
             
             def mouseMoveEvent(self, event):
-                """マウス移動時のイベントハンドラ - ホバー効果を提供"""
+                """マウス移動時のイベントハンドラ - ホバー効果とドラッグ時のペイント"""
                 grid_pos = self.get_grid_position(event.pos())
                 if grid_pos:
-                    # 前回のホバー位置と異なる場合のみシグナル発信
+                    # ホバー位置の更新
                     if grid_pos != self.hover_grid_pos:
                         self.hover_grid_pos = grid_pos
                         self.hover.emit(grid_pos[0], grid_pos[1])
-                        # ツールチップでグリッド位置を表示
                         QToolTip.showText(event.globalPos(), f"位置: [{grid_pos[0]}, {grid_pos[1]}]", self)
+                    
+                    # ドラッグ中の場合は、ペイントシグナルを発信
+                    if self.is_dragging and event.buttons() & Qt.LeftButton:
+                        self.dragPaint.emit(grid_pos[0], grid_pos[1])
+                
                 super().mouseMoveEvent(event)
             
             def mousePressEvent(self, event):
                 """マウスクリック時のイベントハンドラ"""
-                grid_pos = self.get_grid_position(event.pos())
-                if grid_pos:
-                    grid_x, grid_y = grid_pos
-                    # デバッグ出力
-                    print(f"Label Size: {self.width()}x{self.height()}")
-                    print(f"Pixmap Size: {self.pixmap_size}")
-                    print(f"Click Position: {event.pos().x()}, {event.pos().y()}")
-                    print(f"Grid Position: {grid_x}, {grid_y}")
-                    
-                    # 最後にクリックした位置を保存
-                    self.last_clicked_pos = grid_pos
-                    # クリックがグリッド内の有効な位置にある場合にシグナルを発信
-                    self.clicked.emit(grid_x, grid_y)
+                if event.button() == Qt.LeftButton:
+                    self.is_dragging = True
+                    grid_pos = self.get_grid_position(event.pos())
+                    if grid_pos:
+                        grid_x, grid_y = grid_pos
+                        # デバッグ出力
+                        print(f"Label Size: {self.width()}x{self.height()}")
+                        print(f"Pixmap Size: {self.pixmap_size}")
+                        print(f"Click Position: {event.pos().x()}, {event.pos().y()}")
+                        print(f"Grid Position: {grid_x}, {grid_y}")
+                        
+                        # 最後にクリックした位置を保存
+                        self.last_clicked_pos = grid_pos
+                        # クリックがグリッド内の有効な位置にある場合にシグナルを発信
+                        self.clicked.emit(grid_x, grid_y)
+            
+            def mouseReleaseEvent(self, event):
+                """マウスリリース時のイベントハンドラ"""
+                if event.button() == Qt.LeftButton:
+                    self.is_dragging = False
+                super().mouseReleaseEvent(event)
+                
+            def wheelEvent(self, event):
+                """マウスホイール時のイベントハンドラ - ズームイン/アウト用"""
+                delta = event.angleDelta().y()
+                zoom_change = 1 if delta > 0 else -1
+                self.mouseWheel.emit(zoom_change)
+                event.accept()
         
         # 減色後画像表示エリア
         reduced_area = QVBoxLayout()
         
         # ドット編集用ツールバー
         edit_toolbar = QHBoxLayout()
+        
+        # ペイントモード切り替えボタン
+        paint_mode_btn = QPushButton("ペンモード")
+        paint_mode_btn.setToolTip("ペンでドットを描く")
+        paint_mode_btn.setCheckable(True)
+        paint_mode_btn.setChecked(True)
+        paint_mode_btn.clicked.connect(lambda checked: self.set_paint_mode(True))
+        
+        # バケツ（塗りつぶし）モード切り替えボタン
+        bucket_mode_btn = QPushButton("塗りつぶし")
+        bucket_mode_btn.setToolTip("同じ色のドットを塗りつぶす")
+        bucket_mode_btn.setCheckable(True)
+        bucket_mode_btn.clicked.connect(lambda checked: self.set_bucket_mode(checked))
+        
+        # 選択モード切り替えボタン
+        select_mode_btn = QPushButton("選択モード")
+        select_mode_btn.setToolTip("クリックで色を選択")
+        select_mode_btn.setCheckable(True)
+        select_mode_btn.clicked.connect(lambda checked: self.set_paint_mode(False))
+        
+        # モードボタンをグループ化
+        self.mode_buttons = [paint_mode_btn, select_mode_btn]
+        
+        # カラーピッカーボタン（現在のペイント色表示）
+        self.color_pick_btn = QPushButton()
+        self.color_pick_btn.setFixedSize(30, 30)
+        self.set_button_color(self.color_pick_btn, self.current_paint_color)
+        self.color_pick_btn.setToolTip("クリックして描画色を変更")
+        self.color_pick_btn.clicked.connect(self.select_paint_color)
+        
+        # スポイトボタン
+        eyedropper_btn = QPushButton("🔍")
+        eyedropper_btn.setToolTip("クリックでドットの色を取得")
+        eyedropper_btn.clicked.connect(self.toggle_eyedropper_mode)
+        
+        # 透明色ボタン
+        transparent_btn = QPushButton("透明")
+        transparent_btn.setToolTip("透明色（黒=0,0,0）で描画")
+        transparent_btn.clicked.connect(self.set_transparent_paint_color)
         
         # 元に戻す（Undo）ボタン
         undo_btn = QPushButton("元に戻す")
@@ -571,21 +630,39 @@ class DotPlateApp(QMainWindow):
         redo_btn.clicked.connect(self.redo_edit)
         
         # ツールバーにボタンを追加
-        edit_toolbar.addWidget(undo_btn)
-        edit_toolbar.addWidget(redo_btn)
+        mode_toolbar = QHBoxLayout()
+        mode_toolbar.addWidget(paint_mode_btn)
+        mode_toolbar.addWidget(bucket_mode_btn)
+        mode_toolbar.addWidget(select_mode_btn)
+        
+        color_toolbar = QHBoxLayout()
+        color_toolbar.addWidget(self.color_pick_btn)
+        color_toolbar.addWidget(eyedropper_btn)
+        color_toolbar.addWidget(transparent_btn)
+        
+        history_toolbar = QHBoxLayout()
+        history_toolbar.addWidget(undo_btn)
+        history_toolbar.addWidget(redo_btn)
+        
+        # ツールバーをメインレイアウトに追加
+        edit_toolbar.addLayout(mode_toolbar)
+        edit_toolbar.addLayout(color_toolbar)
+        edit_toolbar.addLayout(history_toolbar)
         
         # ドット画像ラベル
-        reduced_label = QLabel("減色後のドット画像（クリックで色を変更）")
+        reduced_label = QLabel("減色後のドット画像")
         reduced_label.setAlignment(Qt.AlignCenter)
         
         # 操作方法説明用のツールチップ
         info_label = QLabel("編集方法")
         info_label.setToolTip(
             "ドット編集方法:\n"
-            "・ドットをクリック: 色の変更や透明化ができます\n"
+            "・ペンモード: クリック・ドラッグでドットを描画\n"
+            "・塗りつぶし: 同じ色のドットをクリックで塗りつぶし\n"
+            "・選択モード: ドットをクリックして色の変更や透明化\n"
+            "・スクロール: ズームイン/アウト\n"
             "・透明にする: 黒色(0,0,0)として処理されます\n"
-            "・元に戻す/やり直し: 編集履歴の操作が可能です\n"
-            "・選択中のドット: 赤色の枠線でハイライト表示されます"
+            "・元に戻す/やり直し: 編集履歴の操作が可能です"
         )
         info_label.setAlignment(Qt.AlignCenter)
         info_label.setStyleSheet("color: blue; text-decoration: underline;")
@@ -605,12 +682,17 @@ class DotPlateApp(QMainWindow):
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        # クリックシグナルとホバーシグナルを接続
+        # シグナルを接続
         self.preview_label.clicked.connect(self.on_preview_clicked)
         self.preview_label.hover.connect(self.on_preview_hover)
+        self.preview_label.dragPaint.connect(self.on_preview_drag_paint)
+        self.preview_label.mouseWheel.connect(self.on_preview_mouse_wheel)
         
         self.preview_scroll.setWidget(self.preview_label)
         reduced_area.addWidget(self.preview_scroll)
+        
+        # 現在モードの変数
+        self.eyedropper_mode = False  # スポイトモード
         
         # 両方の画像エリアを水平に並べる
         preview_images_layout.addLayout(original_area)
@@ -627,9 +709,9 @@ class DotPlateApp(QMainWindow):
         self.zoom_label = QLabel("ズーム:")
         self.zoom_slider = QSlider(Qt.Horizontal)
         self.zoom_slider.setMinimum(1)
-        self.zoom_slider.setMaximum(20)
+        self.zoom_slider.setMaximum(40)  # より広いズーム範囲
         self.zoom_slider.setValue(10)
-        self.zoom_slider.valueChanged.connect(self.update_preview)
+        self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
         
         zoom_layout.addWidget(self.zoom_label)
         zoom_layout.addWidget(self.zoom_slider)
@@ -873,6 +955,184 @@ class DotPlateApp(QMainWindow):
         except Exception as e:
             print(f"ホバープレビュー更新エラー: {str(e)}")
     
+    def on_zoom_changed(self, value):
+        """ズームスライダーの値が変更されたときの処理"""
+        self.zoom_factor = value
+        self.update_preview(custom_pixels=self.pixels_rounded_np)
+        
+    def on_preview_mouse_wheel(self, zoom_change):
+        """マウスホイールでズームを変更する処理"""
+        current_zoom = self.zoom_slider.value()
+        new_zoom = max(1, min(self.zoom_slider.maximum(), current_zoom + zoom_change))
+        self.zoom_slider.setValue(new_zoom)
+        
+    def set_paint_mode(self, is_paint):
+        """ペイントモードと選択モードの切り替え"""
+        self.is_paint_mode = is_paint
+        
+        # モードボタンの状態を更新
+        for btn in self.mode_buttons:
+            btn.setChecked(False)
+        
+        self.mode_buttons[0 if is_paint else 1].setChecked(True)
+        
+        # 塗りつぶしモードはペイントモードの時のみ有効
+        if not is_paint:
+            self.is_bucket_mode = False
+            
+        # ステータスバー更新
+        mode_name = "ペンモード" if is_paint else "選択モード"
+        self.statusBar().showMessage(f"モード: {mode_name}")
+        
+    def set_bucket_mode(self, is_bucket):
+        """塗りつぶしモードの切り替え"""
+        self.is_bucket_mode = is_bucket
+        
+        # 塗りつぶしモードはペイントモードの時のみ有効
+        if is_bucket:
+            self.is_paint_mode = True
+            self.mode_buttons[0].setChecked(True)
+            
+        # ステータスバー更新
+        mode_name = "塗りつぶしモード" if is_bucket else "ペンモード"
+        self.statusBar().showMessage(f"モード: {mode_name}")
+    
+    def toggle_eyedropper_mode(self):
+        """スポイトモードの切り替え"""
+        self.eyedropper_mode = not self.eyedropper_mode
+        
+        # スポイトモード中はカーソルを変更するなどの処理を追加可能
+        if self.eyedropper_mode:
+            self.statusBar().showMessage("スポイトモード: クリックして色を取得")
+        else:
+            self.statusBar().showMessage("準備完了")
+    
+    def select_paint_color(self):
+        """ペイントに使用する色を選択"""
+        color = QColorDialog.getColor(self.current_paint_color, self, "描画色を選択")
+        if color.isValid():
+            self.current_paint_color = color
+            self.set_button_color(self.color_pick_btn, color)
+    
+    def set_transparent_paint_color(self):
+        """透明色（黒=0,0,0）をペイント色に設定"""
+        self.current_paint_color = QColor(0, 0, 0)
+        self.set_button_color(self.color_pick_btn, self.current_paint_color)
+    
+    def get_pixel_color(self, grid_x, grid_y):
+        """指定位置のピクセル色を取得する"""
+        if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
+            return None
+            
+        try:
+            # NumPy配列は[row, col]=[y, x]の順でアクセス
+            array_y = grid_y
+            array_x = grid_x
+            current_color = self.pixels_rounded_np[array_y, array_x]
+            return current_color
+        except IndexError:
+            print(f"座標[{array_y}, {array_x}]はインデックス範囲外です")
+            return None
+    
+    def paint_pixel(self, grid_x, grid_y, color=None):
+        """ピクセルを指定色で塗る（デフォルトは現在のペイント色）"""
+        if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
+            return False
+            
+        if color is None:
+            # QColorからRGB配列に変換
+            color = [self.current_paint_color.red(), 
+                     self.current_paint_color.green(), 
+                     self.current_paint_color.blue()]
+            
+        try:
+            # NumPy配列は[row, col]=[y, x]の順でアクセス
+            array_y = grid_y
+            array_x = grid_x
+            
+            # 現在の色と同じなら変更しない
+            current_color = self.pixels_rounded_np[array_y, array_x]
+            if tuple(current_color) == tuple(color):
+                return False
+                
+            # 編集前の状態を履歴に保存（最初の変更時のみ）
+            self.save_edit_history()
+                
+            # ピクセルの色を更新
+            self.pixels_rounded_np[array_y, array_x] = color
+            return True
+            
+        except IndexError:
+            print(f"座標[{array_y}, {array_x}]はインデックス範囲外です")
+            return False
+            
+    def bucket_fill(self, grid_x, grid_y):
+        """塗りつぶし処理 - 同じ色の隣接ドットを全て指定色で塗る"""
+        if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
+            return
+            
+        # 編集前の状態を履歴に保存
+        self.save_edit_history()
+        
+        # 塗りつぶす元の色
+        target_color = tuple(self.get_pixel_color(grid_x, grid_y))
+        if target_color is None:
+            return
+            
+        # 新しい色（現在のペイント色）
+        new_color = [self.current_paint_color.red(), 
+                     self.current_paint_color.green(), 
+                     self.current_paint_color.blue()]
+                     
+        # 同じ色なら塗りつぶす必要なし
+        if target_color == tuple(new_color):
+            return
+        
+        # 幅優先探索で塗りつぶし
+        grid_size = self.pixels_rounded_np.shape[0]  # グリッドサイズ
+        visited = set()  # 訪問済み座標
+        queue = [(grid_x, grid_y)]  # 処理待ちキュー
+        
+        while queue:
+            x, y = queue.pop(0)
+            
+            # 既に訪問済みならスキップ
+            if (x, y) in visited:
+                continue
+                
+            # 範囲外ならスキップ
+            if not (0 <= x < grid_size and 0 <= y < grid_size):
+                continue
+                
+            # 色が異なればスキップ
+            current = tuple(self.pixels_rounded_np[y, x])
+            if current != target_color:
+                continue
+                
+            # 色を変更
+            self.pixels_rounded_np[y, x] = new_color
+            visited.add((x, y))
+            
+            # 隣接する4方向をキューに追加
+            neighbors = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
+            for nx, ny in neighbors:
+                if (nx, ny) not in visited:
+                    queue.append((nx, ny))
+        
+        # プレビューを更新
+        self.update_preview(custom_pixels=self.pixels_rounded_np)
+    
+    def on_preview_drag_paint(self, grid_x, grid_y):
+        """ドラッグ中のペイント処理"""
+        if not self.is_paint_mode or self.eyedropper_mode or self.pixels_rounded_np is None:
+            return
+            
+        # ペイントモードの場合は色を塗る
+        self.paint_pixel(grid_x, grid_y)
+        
+        # プレビューを更新
+        self.update_preview(custom_pixels=self.pixels_rounded_np)
+    
     def on_preview_clicked(self, grid_x, grid_y):
         """減色後のプレビュー画像内のドットがクリックされたときの処理"""
         if self.pixels_rounded_np is None:
@@ -881,66 +1141,41 @@ class DotPlateApp(QMainWindow):
         # デバッグ情報
         print(f"ドットクリック: grid_x={grid_x}, grid_y={grid_y}")
         
+        # スポイトモードの場合は色を取得
+        if self.eyedropper_mode:
+            color = self.get_pixel_color(grid_x, grid_y)
+            if color is not None:
+                self.current_paint_color = QColor(color[0], color[1], color[2])
+                self.set_button_color(self.color_pick_btn, self.current_paint_color)
+                self.statusBar().showMessage(f"色を取得しました: RGB({color[0]}, {color[1]}, {color[2]})")
+                self.eyedropper_mode = False  # 取得後にモードを解除
+            return
+        
+        # ペイントモードの場合
+        if self.is_paint_mode:
+            # 塗りつぶしモードの場合
+            if self.is_bucket_mode:
+                self.bucket_fill(grid_x, grid_y)
+            else:
+                # 通常のペイントモード
+                self.paint_pixel(grid_x, grid_y)
+                self.update_preview(custom_pixels=self.pixels_rounded_np)
+            return
+        
+        # 以下は選択モード（カラーダイアログ表示）
         # 型チェック: pixels_rounded_npが正しくnumpy配列であることを確認
         if not isinstance(self.pixels_rounded_np, np.ndarray):
             print(f"エラー: pixels_rounded_npが正しいnumpy配列ではありません: {type(self.pixels_rounded_np)}")
             return
             
-        print(f"pixels_rounded_np.shape = {self.pixels_rounded_np.shape}")
-        
-        # ピクセル配列の中身をテスト表示
-        grid_height = self.pixels_rounded_np.shape[0]
-        print(f"グリッド高さ: {grid_height}")
-        
-        # 座標変換前の位置の色を確認
         try:
-            # 反転前
-            orig_color = self.pixels_rounded_np[grid_y, grid_x]
-            print(f"変換前座標[{grid_y}, {grid_x}]の色: RGB({orig_color[0]}, {orig_color[1]}, {orig_color[2]})")
-        except IndexError:
-            print(f"変換前座標[{grid_y}, {grid_x}]はインデックス範囲外です")
+            # NumPy配列は[row, col]=[y, x]の順でアクセス
+            array_y = grid_y
+            array_x = grid_x
             
-        # グリッド座標の調整（表示上の座標からピクセル配列の座標に変換）
-        # 重要: Y座標を反転するのは、配列と表示が上下逆の場合のみ
-        array_y = grid_y  # まずは反転せず試す
-        array_x = grid_x  # X軸は調整不要の可能性が高い
-        
-        # 反転後の座標も表示（デバッグ用）
-        print(f"変換後配列座標: array_x={array_x}, array_y={array_y}")
-        
-        try:
-            # 本質的な問題: PILやUIの座標系とNumPy配列のインデックスには2つの違いがある
-            # 1. UI/画像では (x, y) の順だが、NumPy配列では [row, col] = [y, x] の順
-            # 2. PILやQtのY軸は上から下、配列でも同様に上から下の行インデックスが増える
+            # 配列アクセス
+            current_color = self.pixels_rounded_np[array_y, array_x]
             
-            # 座標変換方法:
-            # 1. x,y を入れ替えずに配列にアクセス
-            # 2. Y軸反転は必要ない (UIと配列の座標系が同じ向き)
-            
-            # 正しい配列アクセス - [grid_y, grid_x] でアクセス
-            # つまり、クリック位置(16, 18)なら配列[18, 16]にアクセスする
-            array_y = grid_y  # Y軸は反転しない
-            array_x = grid_x  # X軸はそのまま
-            
-            # 座標変換と色の確認 (デバッグ用)
-            print(f"クリック位置(x,y): ({grid_x}, {grid_y})")
-            print(f"配列アクセス[row,col]=[y,x]: [{array_y}, {array_x}]")
-            
-            # 配列は[row, column]=[y, x]の順でアクセス
-            try:
-                # まず正しいと思われる順序でアクセス
-                current_color = self.pixels_rounded_np[array_y, array_x]
-                print(f"配列[{array_y}, {array_x}]の色: RGB({current_color[0]}, {current_color[1]}, {current_color[2]})")
-            except IndexError:
-                print(f"配列[{array_y}, {array_x}]はインデックス範囲外です")
-                
-            # X,Yを入れ替えてアクセスしてみる (デバッグ用)
-            try:
-                swapped_color = self.pixels_rounded_np[array_x, array_y]
-                print(f"配列[{array_x}, {array_y}](x,y順)の色: RGB({swapped_color[0]}, {swapped_color[1]}, {swapped_color[2]})")
-            except IndexError:
-                print(f"配列[{array_x}, {array_y}]はインデックス範囲外です")
-                
             # 選択したドットの色をQColorに変換
             rgb_color = QColor(current_color[0], current_color[1], current_color[2])
         
@@ -961,6 +1196,10 @@ class DotPlateApp(QMainWindow):
         transparent_check.setChecked(is_transparent)
         layout.addWidget(transparent_check)
         
+        # カラーピッカーとして使用ボタン
+        pick_btn = QPushButton("この色をペイント色に設定")
+        pick_btn.clicked.connect(lambda: self.pick_color_for_paint(rgb_color, dialog))
+        
         # 色選択ダイアログボタン
         color_btn = QPushButton("色を選択")
         color_btn.clicked.connect(lambda: self.show_color_dialog(rgb_color, grid_x, grid_y, dialog, transparent_check))
@@ -974,15 +1213,25 @@ class DotPlateApp(QMainWindow):
         cancel_btn.clicked.connect(dialog.reject)
         
         # ボタンレイアウト
+        pick_layout = QHBoxLayout()
+        pick_layout.addWidget(pick_btn)
+        
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(color_btn)
         btn_layout.addWidget(transparent_btn)
         btn_layout.addWidget(cancel_btn)
         
+        layout.addLayout(pick_layout)
         layout.addLayout(btn_layout)
         
         # ダイアログを表示
         dialog.exec_()
+    
+    def pick_color_for_paint(self, color, dialog):
+        """選択したドットの色をペイント色として設定"""
+        self.current_paint_color = color
+        self.set_button_color(self.color_pick_btn, color)
+        dialog.accept()
         
     def show_color_dialog(self, current_color, grid_x, grid_y, parent_dialog, transparent_check):
         """色選択ダイアログを表示"""
@@ -1224,12 +1473,14 @@ class DotPlateApp(QMainWindow):
             self.original_image_label.setPixmap(original_pixmap)
             self.original_image_label.adjustSize()
             
-            # 最後にクリックされた位置があれば取得
+            # ペイントモードではハイライト表示しない
             highlight_pos = None
-            if hasattr(self.preview_label, 'last_clicked_pos') and self.preview_label.last_clicked_pos is not None:
-                highlight_pos = self.preview_label.last_clicked_pos
+            # 選択モードの場合のみ、最後にクリックされた位置をハイライト表示
+            if not self.is_paint_mode:
+                if hasattr(self.preview_label, 'last_clicked_pos') and self.preview_label.last_clicked_pos is not None:
+                    highlight_pos = self.preview_label.last_clicked_pos
                 
-            # ホバー位置の取得
+            # ホバー位置の取得（スポイトモード時は明確に表示）
             hover_pos = None
             if hasattr(self.preview_label, 'hover_grid_pos') and self.preview_label.hover_grid_pos is not None:
                 hover_pos = self.preview_label.hover_grid_pos
@@ -1314,6 +1565,17 @@ class DotPlateApp(QMainWindow):
                 
                 self.preview_label.setPixmap(preview_pixmap)
                 self.preview_label.adjustSize()
+                
+                # カーソルをモードに応じて変更
+                if self.eyedropper_mode:
+                    self.preview_label.setCursor(Qt.CrossCursor)  # スポイトモード
+                elif self.is_bucket_mode:
+                    self.preview_label.setCursor(Qt.PointingHandCursor)  # 塗りつぶしモード
+                elif self.is_paint_mode:
+                    self.preview_label.setCursor(Qt.ArrowCursor)  # ペイントモード
+                else:
+                    self.preview_label.setCursor(Qt.ArrowCursor)  # 選択モード
+                
             except Exception as e:
                 print(f"プレビュー表示エラー: {str(e)}")
                 self.input_label.setText(f"プレビュー表示エラー: {str(e)}")
