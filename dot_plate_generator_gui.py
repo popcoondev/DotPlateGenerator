@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout, QDoubleSpinBox,
     QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
-    QColorDialog, QCheckBox
+    QColorDialog, QCheckBox, QComboBox, QMenu, QAction
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QPixmap, QImage, QColor
@@ -36,12 +36,170 @@ except ImportError:
 # 補助関数
 # -------------------------------
 def normalize_colors(pixels, step):
+    """単純な量子化による減色"""
     return (pixels // step) * step
 
 def map_to_closest_color(pixel, palette):
+    """ユークリッド距離で最も近い色を選択"""
     return min(palette, key=lambda c: distance.euclidean(pixel, c))
 
-def generate_preview_image(image_path, grid_size, color_step, top_color_limit, zoom_factor=10, custom_pixels=None, highlight_pos=None, hover_pos=None):
+def get_median_cut_palette(pixels, num_colors):
+    """メディアンカット法でカラーパレットを生成"""
+    if len(pixels) == 0:
+        return np.array([], dtype=np.uint8)
+    
+    # RGB値をfloatに変換してコピー
+    pixels_copy = pixels.copy().astype(np.float64)
+    
+    # 各カラーチャンネルの範囲
+    ranges = np.max(pixels_copy, axis=0) - np.min(pixels_copy, axis=0)
+    
+    # 最大範囲を持つチャンネル
+    channel = np.argmax(ranges)
+    
+    # 色空間を分割
+    def split_colors(pixels_subset, colors_left, result_palette):
+        if colors_left <= 1 or len(pixels_subset) == 0:
+            # このグループの代表色として平均値を計算
+            if len(pixels_subset) > 0:
+                avg_color = np.mean(pixels_subset, axis=0).astype(np.uint8)
+                result_palette.append(avg_color)
+            return
+        
+        # 各チャンネルの範囲
+        ranges = np.max(pixels_subset, axis=0) - np.min(pixels_subset, axis=0)
+        
+        # 最大範囲を持つチャンネル
+        channel = np.argmax(ranges)
+        
+        # そのチャンネルでソート
+        sorted_pixels = pixels_subset[pixels_subset[:, channel].argsort()]
+        
+        # 中央で分割
+        median_idx = len(sorted_pixels) // 2
+        
+        # 再帰的に分割
+        split_colors(sorted_pixels[:median_idx], colors_left // 2, result_palette)
+        split_colors(sorted_pixels[median_idx:], colors_left - colors_left // 2, result_palette)
+    
+    # パレット生成
+    palette = []
+    split_colors(pixels_copy, num_colors, palette)
+    
+    return np.array(palette, dtype=np.uint8)
+
+def get_kmeans_palette(pixels, num_colors):
+    """K-means法でカラーパレットを生成"""
+    from sklearn.cluster import KMeans
+    import warnings
+    
+    # 警告を無視（K-meansの収束警告など）
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        
+        # 入力データが少なすぎる場合はnum_colorsを調整
+        n_colors = min(num_colors, len(pixels))
+        if n_colors == 0:
+            return np.array([], dtype=np.uint8)
+            
+        # K-means実行
+        kmeans = KMeans(n_clusters=n_colors, random_state=0, n_init=10)
+        kmeans.fit(pixels)
+        
+        # クラスタ中心がパレット色
+        palette = kmeans.cluster_centers_.astype(np.uint8)
+        
+        return palette
+
+def get_octree_palette(pixels, num_colors):
+    """オクトツリー量子化でカラーパレットを生成"""
+    # 安全な実装のためのシンプルなアプローチ
+    try:
+        # PIL ImageQuantを使用
+        from PIL import Image
+        
+        # ピクセルデータをIm​age形式に変換
+        # ピクセル形状問題を修正
+        if len(pixels) == 0:
+            return np.array([], dtype=np.uint8)
+            
+        # 入力が2次元配列でない場合を処理
+        if len(pixels.shape) == 1:
+            # 1次元配列の場合、3列の2次元配列に変形
+            pixels_2d = pixels.reshape(-1, 3)
+        elif len(pixels.shape) > 2:
+            # 3次元以上の場合、平坦化して2次元に
+            pixels_2d = pixels.reshape(-1, 3)
+        else:
+            # 既に2次元の場合はそのまま
+            pixels_2d = pixels
+            
+        # 一時的なカラー画像を作成
+        img_size = int(np.ceil(np.sqrt(len(pixels_2d))))
+        temp_img = Image.new('RGB', (img_size, img_size), (0, 0, 0))
+        
+        # ピクセルデータを画像に設定
+        for i, (r, g, b) in enumerate(pixels_2d):
+            if i >= img_size * img_size:
+                break
+            x = i % img_size
+            y = i // img_size
+            temp_img.putpixel((x, y), (int(r), int(g), int(b)))
+        
+        # Octree量子化（method=2）を実行
+        quantized = temp_img.quantize(colors=min(num_colors, 256), method=2)
+        
+        # パレット画像に変換
+        palette_img = quantized.convert('RGB')
+        
+        # パレットカラー抽出
+        colors = palette_img.getcolors(maxcolors=num_colors*2)
+        
+        if not colors:
+            # getcolorsが失敗した場合、単純な減色にフォールバック
+            # ここはmedian cut法を使用
+            return get_median_cut_palette(pixels, num_colors)
+            
+        # パレットを構築
+        palette = []
+        for count, color in colors:
+            palette.append(color)
+            
+        # NumPy配列に変換
+        palette_array = np.array(palette, dtype=np.uint8)
+        
+        # 色数が少なすぎる場合の対応
+        if len(palette_array) < num_colors:
+            # 足りない色は元の画像からランダムサンプリング
+            missing = num_colors - len(palette_array)
+            indices = np.random.choice(len(pixels_2d), size=missing, replace=False)
+            additional_colors = pixels_2d[indices]
+            palette_array = np.vstack([palette_array, additional_colors])
+        
+        # 必要数を超えた場合は切り詰め
+        return palette_array[:num_colors]
+        
+    except Exception as e:
+        # エラーが発生した場合はMedian Cut法にフォールバック
+        print(f"オクトツリー法でエラーが発生したため、Median Cut法を使用します: {str(e)}")
+        return get_median_cut_palette(pixels, num_colors)
+
+def generate_preview_image(image_path, grid_size, color_step, top_color_limit, zoom_factor=10, 
+                       custom_pixels=None, highlight_pos=None, hover_pos=None, color_algo="simple"):
+    """
+    プレビュー画像を生成する関数
+    
+    Args:
+        image_path: 元画像のパス
+        grid_size: グリッドサイズ（ドット解像度）
+        color_step: 色の量子化ステップ（simpleアルゴリズム用）
+        top_color_limit: 使用する上位色数
+        zoom_factor: 表示倍率
+        custom_pixels: カスタムピクセルデータ（編集済みの場合）
+        highlight_pos: ハイライトする位置
+        hover_pos: ホバー中の位置
+        color_algo: 減色アルゴリズム ("simple", "median_cut", "kmeans", "octree")
+    """
     # 型チェックと値チェック
     if not isinstance(grid_size, int) or grid_size <= 0:
         raise ValueError("grid_size must be a positive integer")
@@ -57,11 +215,49 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
         img = Image.open(image_path).convert("RGB")
         img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
         pixels = np.array(img_resized).reshape(-1, 3)
-        pixels_normalized = normalize_colors(pixels, color_step)
-        colors = [tuple(c) for c in pixels_normalized]
-        color_counts = Counter(colors)
-        top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
-        pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+        
+        # 選択されたアルゴリズムで減色処理
+        if color_algo == "simple":
+            # 単純な量子化アルゴリズム（従来のもの）
+            pixels_normalized = normalize_colors(pixels, color_step)
+            colors = [tuple(c) for c in pixels_normalized]
+            color_counts = Counter(colors)
+            top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
+            pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+            
+        elif color_algo == "median_cut":
+            # メディアンカット法
+            palette = get_median_cut_palette(pixels, top_color_limit)
+            pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+            
+        elif color_algo == "kmeans":
+            # K-means法
+            try:
+                palette = get_kmeans_palette(pixels, top_color_limit)
+                pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+            except ImportError:
+                # scikit-learnがインストールされていない場合は単純アルゴリズムにフォールバック
+                print("K-means減色にはscikit-learnが必要です。単純アルゴリズムを使用します。")
+                pixels_normalized = normalize_colors(pixels, color_step)
+                colors = [tuple(c) for c in pixels_normalized]
+                color_counts = Counter(colors)
+                top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
+                pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+                
+        elif color_algo == "octree":
+            # オクトツリー法
+            palette = get_octree_palette(pixels, top_color_limit)
+            pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+            
+        else:
+            # デフォルトは単純アルゴリズム
+            pixels_normalized = normalize_colors(pixels, color_step)
+            colors = [tuple(c) for c in pixels_normalized]
+            color_counts = Counter(colors)
+            top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
+            pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+        
+        # 適切な形状のnumpy配列に変換
         pixels_array = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
     
     # 透過色（黒=0,0,0）を特別処理
@@ -477,6 +673,9 @@ class DotPlateApp(QMainWindow):
         self.is_paint_mode = True      # ペイントモード（True）または選択モード（False）
         self.is_bucket_mode = False    # 塗りつぶしモード
         
+        # 減色アルゴリズム用変数
+        self.current_color_algo = "simple"  # デフォルトアルゴリズム
+        
         # クリック可能なカスタムラベルの定義
         from PyQt5.QtCore import pyqtSignal
         
@@ -760,6 +959,28 @@ class DotPlateApp(QMainWindow):
         param_group = QGroupBox("パラメータ設定")
         param_layout = QVBoxLayout()
         
+        # 減色アルゴリズム選択
+        color_algo_layout = QHBoxLayout()
+        color_algo_label = QLabel("減色アルゴリズム:")
+        self.color_algo_combo = QComboBox()
+        self.color_algo_combo.addItems([
+            "単純量子化 (Simple)", 
+            "メディアンカット法 (Median Cut)", 
+            "K-means法 (K-means)", 
+            "オクトツリー法 (Octree)"
+        ])
+        self.color_algo_combo.setToolTip(
+            "減色アルゴリズムの選択:\n"
+            "・単純量子化: 最も高速で簡単なアルゴリズム\n"
+            "・メディアンカット法: 色空間を分割し、各領域の代表色を使用\n"
+            "・K-means法: 機械学習ベースの色のクラスタリング\n"
+            "・オクトツリー法: 色空間の階層的分割による高品質な減色"
+        )
+        self.color_algo_combo.currentIndexChanged.connect(self.on_color_algo_changed)
+        
+        color_algo_layout.addWidget(color_algo_label)
+        color_algo_layout.addWidget(self.color_algo_combo)
+        
         # 壁の色設定
         wall_color_layout = QHBoxLayout()
         wall_color_label = QLabel("壁の色:")
@@ -779,6 +1000,7 @@ class DotPlateApp(QMainWindow):
         self.merge_same_color_checkbox.setToolTip("このオプションを有効にすると、同じ色のドット同士の間の内壁が作られなくなります。")
         
         # レイアウトに追加
+        param_layout.addLayout(color_algo_layout)
         param_layout.addLayout(wall_color_layout)
         param_layout.addWidget(self.merge_same_color_checkbox)
         
@@ -1478,6 +1700,34 @@ class DotPlateApp(QMainWindow):
                 self.preview_label.last_clicked_pos = None
             self.update_preview()
     
+    def on_color_algo_changed(self, index):
+        """減色アルゴリズムが変更されたときの処理"""
+        algo_map = {
+            0: "simple",     # 単純量子化
+            1: "median_cut", # メディアンカット法
+            2: "kmeans",     # K-means法
+            3: "octree"      # オクトツリー法
+        }
+        
+        self.current_color_algo = algo_map.get(index, "simple")
+        
+        # ステータスメッセージ更新
+        status_messages = {
+            "simple": "単純量子化アルゴリズムを使用します",
+            "median_cut": "メディアンカット法（色空間分割による減色）を使用します",
+            "kmeans": "K-means法（機械学習ベースのクラスタリング）を使用します",
+            "octree": "オクトツリー法（階層的色空間分割）を使用します"
+        }
+        
+        self.statusBar().showMessage(status_messages.get(self.current_color_algo, "減色アルゴリズムを変更しました"))
+        
+        # 画像がロードされていればプレビューを更新
+        if hasattr(self, 'image_path') and self.image_path:
+            # 編集履歴をリセット
+            if hasattr(self, 'pixels_rounded_np'):
+                self.pixels_rounded_np = None
+            self.update_preview()
+    
     def update_preview(self, custom_pixels=None):
         """プレビュー画像を更新する（custom_pixelsが指定された場合はそれを使用）"""
         if not self.image_path:
@@ -1540,8 +1790,9 @@ class DotPlateApp(QMainWindow):
                         int(params["Top Colors"]),
                         self.zoom_factor,
                         custom_pixels=self.pixels_rounded_np,
-                        highlight_pos=highlight_pos,  # ハイライト位置を渡す
-                        hover_pos=hover_pos  # ホバー位置を渡す
+                        highlight_pos=highlight_pos,
+                        hover_pos=hover_pos,
+                        color_algo=self.current_color_algo
                     )
                 else:
                     # 新たに画像を生成
@@ -1551,18 +1802,22 @@ class DotPlateApp(QMainWindow):
                         int(params["Color Step"]),
                         int(params["Top Colors"]),
                         self.zoom_factor,
-                        highlight_pos=highlight_pos,  # ハイライト位置を渡す
-                        hover_pos=hover_pos  # ホバー位置を渡す
+                        highlight_pos=highlight_pos,
+                        hover_pos=hover_pos,
+                        color_algo=self.current_color_algo
                     )
             except Exception as e:
                 # エラーが発生した場合、カスタムピクセルを無視して再試行
-                print(f"プレビュー生成エラー: {str(e)}、カスタムピクセルなしで再試行します")
+                print(f"プレビュー生成エラー: {str(e)}、単純アルゴリズムで再試行します")
+                self.current_color_algo = "simple"  # 単純アルゴリズムにフォールバック
+                self.color_algo_combo.setCurrentIndex(0)  # UIも更新
                 preview_img = generate_preview_image(
                     self.image_path,
                     self.current_grid_size,
                     int(params["Color Step"]),
                     int(params["Top Colors"]),
-                    self.zoom_factor
+                    self.zoom_factor,
+                    color_algo="simple"
                 )
             
             # カスタムピクセルを使用していない場合のみ、ピクセルデータを生成
@@ -1572,11 +1827,50 @@ class DotPlateApp(QMainWindow):
                     img_resized = Image.open(self.image_path).convert("RGB").resize(
                         (self.current_grid_size, self.current_grid_size), resample=Image.NEAREST)
                     pixels = np.array(img_resized).reshape(-1, 3)
-                    pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
-                    colors = [tuple(c) for c in pixels_normalized]
-                    color_counts = Counter(colors)
-                    top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
-                    pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+                    
+                    # 選択されたアルゴリズムで減色処理
+                    if self.current_color_algo == "simple":
+                        # 単純な量子化アルゴリズム
+                        pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
+                        colors = [tuple(c) for c in pixels_normalized]
+                        color_counts = Counter(colors)
+                        top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
+                        pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+                        
+                    elif self.current_color_algo == "median_cut":
+                        # メディアンカット法
+                        palette = get_median_cut_palette(pixels, int(params["Top Colors"]))
+                        pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+                        
+                    elif self.current_color_algo == "kmeans":
+                        # K-means法
+                        try:
+                            palette = get_kmeans_palette(pixels, int(params["Top Colors"]))
+                            pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+                        except ImportError:
+                            # scikit-learnがインストールされていない場合
+                            print("K-means減色にはscikit-learnが必要です。単純アルゴリズムを使用します。")
+                            self.current_color_algo = "simple"
+                            self.color_algo_combo.setCurrentIndex(0)
+                            # 単純アルゴリズムでフォールバック
+                            pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
+                            colors = [tuple(c) for c in pixels_normalized]
+                            color_counts = Counter(colors)
+                            top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
+                            pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+                            
+                    elif self.current_color_algo == "octree":
+                        # オクトツリー法
+                        palette = get_octree_palette(pixels, int(params["Top Colors"]))
+                        pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+                        
+                    else:
+                        # デフォルトは単純アルゴリズム
+                        pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
+                        colors = [tuple(c) for c in pixels_normalized]
+                        color_counts = Counter(colors)
+                        top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
+                        pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
                     
                     # 適切な形状のnumpy配列に変換
                     pixels_array = np.array(pixels_rounded, dtype=np.uint8)
@@ -1687,22 +1981,86 @@ class DotPlateApp(QMainWindow):
                     # 同じ色のドット間の内壁を省略するオプションの状態を取得
                     merge_same_color = self.merge_same_color_checkbox.isChecked()
                     
-                    # 元の画像から新たにSTLを生成
-                    mesh = generate_dot_plate_stl(
-                        self.image_path,
-                        out_path,
-                        int(params["Grid Size"]),
-                        float(params["Dot Size"]),
-                        float(params["Wall Thickness"]),
-                        float(params["Wall Height"]),
-                        float(params["Base Height"]),
-                        int(params["Color Step"]),
-                        int(params["Top Colors"]),
-                        float(params["Out Thickness"]),
-                        wall_color=wall_color,  # 選択した壁の色を使用
-                        merge_same_color=merge_same_color,  # 同色間の内壁省略オプション
-                        return_colors=True  # メッシュを返すように指定
-                    )
+                    # 選択されたアルゴリズムの情報を表示
+                    algo_names = {
+                        "simple": "単純量子化",
+                        "median_cut": "メディアンカット法",
+                        "kmeans": "K-means法",
+                        "octree": "オクトツリー法"
+                    }
+                    algo_name = algo_names.get(self.current_color_algo, "単純量子化")
+                    self.input_label.setText(f"減色アルゴリズム「{algo_name}」でSTLを生成中...")
+                    QApplication.processEvents()  # UIを更新
+                    
+                    # 元の画像から新たにSTLを生成（減色アルゴリズムを指定）
+                    if hasattr(self, "generate_dot_plate_stl_with_algorithm"):
+                        # 将来的に実装する場合のコード
+                        mesh = self.generate_dot_plate_stl_with_algorithm(
+                            self.image_path,
+                            out_path,
+                            int(params["Grid Size"]),
+                            float(params["Dot Size"]),
+                            float(params["Wall Thickness"]),
+                            float(params["Wall Height"]),
+                            float(params["Base Height"]),
+                            int(params["Color Step"]),
+                            int(params["Top Colors"]),
+                            float(params["Out Thickness"]),
+                            wall_color=wall_color,
+                            merge_same_color=merge_same_color,
+                            return_colors=True,
+                            color_algo=self.current_color_algo
+                        )
+                    else:
+                        # 現状の実装（すでに減色済みの場合はカスタムピクセルを使用）
+                        if self.pixels_rounded_np is not None:
+                            # 減色済みデータから一時画像を作成してSTL生成
+                            from PIL import Image
+                            import tempfile
+                            
+                            # 一時ファイルに画像を保存
+                            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                                tmp_path = tmp.name
+                                # カスタムピクセルデータから画像を作成
+                                custom_img = Image.fromarray(self.pixels_rounded_np, mode='RGB')
+                                custom_img.save(tmp_path)
+                                
+                            mesh = generate_dot_plate_stl(
+                                tmp_path,  # 一時画像パス
+                                out_path,
+                                int(params["Grid Size"]),
+                                float(params["Dot Size"]),
+                                float(params["Wall Thickness"]),
+                                float(params["Wall Height"]),
+                                float(params["Base Height"]),
+                                1,  # 色ステップは1（既に減色済み）
+                                1000,  # 上位色制限は高く設定（全ての色を使用）
+                                float(params["Out Thickness"]),
+                                wall_color=wall_color,
+                                merge_same_color=merge_same_color,
+                                return_colors=True
+                            )
+                            
+                            # 一時ファイルを削除
+                            import os
+                            os.unlink(tmp_path)
+                        else:
+                            # 通常の方法でSTL生成
+                            mesh = generate_dot_plate_stl(
+                                self.image_path,
+                                out_path,
+                                int(params["Grid Size"]),
+                                float(params["Dot Size"]),
+                                float(params["Wall Thickness"]),
+                                float(params["Wall Height"]),
+                                float(params["Base Height"]),
+                                int(params["Color Step"]),
+                                int(params["Top Colors"]),
+                                float(params["Out Thickness"]),
+                                wall_color=wall_color,
+                                merge_same_color=merge_same_color,
+                                return_colors=True
+                            )
                 
                 # メッシュオブジェクトを取得
                 if isinstance(mesh, tuple) and len(mesh) > 0:
