@@ -614,10 +614,11 @@ class DotPlateApp(QMainWindow):
         eyedropper_btn.setToolTip("クリックでドットの色を取得")
         eyedropper_btn.clicked.connect(self.toggle_eyedropper_mode)
         
-        # 透明色ボタン
-        transparent_btn = QPushButton("透明")
-        transparent_btn.setToolTip("透明色（黒=0,0,0）で描画")
-        transparent_btn.clicked.connect(self.set_transparent_paint_color)
+        # 透明色ボタン（トグル式）
+        self.transparent_btn = QPushButton("透明")
+        self.transparent_btn.setToolTip("透明色（黒=0,0,0）で描画")
+        self.transparent_btn.setCheckable(True)
+        self.transparent_btn.toggled.connect(self.toggle_transparent_paint_color)
         
         # 元に戻す（Undo）ボタン
         undo_btn = QPushButton("元に戻す")
@@ -638,7 +639,7 @@ class DotPlateApp(QMainWindow):
         color_toolbar = QHBoxLayout()
         color_toolbar.addWidget(self.color_pick_btn)
         color_toolbar.addWidget(eyedropper_btn)
-        color_toolbar.addWidget(transparent_btn)
+        color_toolbar.addWidget(self.transparent_btn)
         
         history_toolbar = QHBoxLayout()
         history_toolbar.addWidget(undo_btn)
@@ -1004,8 +1005,12 @@ class DotPlateApp(QMainWindow):
         # スポイトモード中はカーソルを変更するなどの処理を追加可能
         if self.eyedropper_mode:
             self.statusBar().showMessage("スポイトモード: クリックして色を取得")
+            # カーソルを十字に変更
+            self.preview_label.setCursor(Qt.CrossCursor)
         else:
             self.statusBar().showMessage("準備完了")
+            # カーソルを元に戻す
+            self.preview_label.setCursor(Qt.ArrowCursor)
     
     def select_paint_color(self):
         """ペイントに使用する色を選択"""
@@ -1014,10 +1019,22 @@ class DotPlateApp(QMainWindow):
             self.current_paint_color = color
             self.set_button_color(self.color_pick_btn, color)
     
-    def set_transparent_paint_color(self):
-        """透明色（黒=0,0,0）をペイント色に設定"""
-        self.current_paint_color = QColor(0, 0, 0)
-        self.set_button_color(self.color_pick_btn, self.current_paint_color)
+    def toggle_transparent_paint_color(self, checked):
+        """透明色（黒=0,0,0）のトグル"""
+        if checked:
+            # 現在の色を保存して透明に切り替え
+            self.prev_paint_color = self.current_paint_color
+            self.current_paint_color = QColor(0, 0, 0)
+            self.set_button_color(self.color_pick_btn, self.current_paint_color)
+            self.statusBar().showMessage("透明モード: 黒色(0,0,0)で描画")
+        else:
+            # 前の色に戻す（保存されていなければデフォルト赤）
+            if hasattr(self, 'prev_paint_color'):
+                self.current_paint_color = self.prev_paint_color
+            else:
+                self.current_paint_color = QColor(255, 0, 0)
+            self.set_button_color(self.color_pick_btn, self.current_paint_color)
+            self.statusBar().showMessage("通常モード")
     
     def get_pixel_color(self, grid_x, grid_y):
         """指定位置のピクセル色を取得する"""
@@ -1138,20 +1155,19 @@ class DotPlateApp(QMainWindow):
         if self.pixels_rounded_np is None:
             return
         
-        # デバッグ情報
-        print(f"ドットクリック: grid_x={grid_x}, grid_y={grid_y}")
-        
         # スポイトモードの場合は色を取得
         if self.eyedropper_mode:
             color = self.get_pixel_color(grid_x, grid_y)
             if color is not None:
                 self.current_paint_color = QColor(color[0], color[1], color[2])
                 self.set_button_color(self.color_pick_btn, self.current_paint_color)
-                self.statusBar().showMessage(f"色を取得しました: RGB({color[0]}, {color[1]}, {color[2]})")
+                self.statusBar().showMessage(f"色を取得: RGB({color[0]}, {color[1]}, {color[2]})")
+                # スポイト使用後は透明モードを解除
+                self.transparent_btn.setChecked(False)
                 self.eyedropper_mode = False  # 取得後にモードを解除
             return
         
-        # ペイントモードの場合
+        # ペイントモードの場合は直接描画
         if self.is_paint_mode:
             # 塗りつぶしモードの場合
             if self.is_bucket_mode:
@@ -1162,12 +1178,7 @@ class DotPlateApp(QMainWindow):
                 self.update_preview(custom_pixels=self.pixels_rounded_np)
             return
         
-        # 以下は選択モード（カラーダイアログ表示）
-        # 型チェック: pixels_rounded_npが正しくnumpy配列であることを確認
-        if not isinstance(self.pixels_rounded_np, np.ndarray):
-            print(f"エラー: pixels_rounded_npが正しいnumpy配列ではありません: {type(self.pixels_rounded_np)}")
-            return
-            
+        # 以下は選択モード
         try:
             # NumPy配列は[row, col]=[y, x]の順でアクセス
             array_y = grid_y
@@ -1178,63 +1189,82 @@ class DotPlateApp(QMainWindow):
             
             # 選択したドットの色をQColorに変換
             rgb_color = QColor(current_color[0], current_color[1], current_color[2])
-        
+            
+            # コンテキストメニューを作成
+            from PyQt5.QtWidgets import QMenu, QAction
+            
+            menu = QMenu(self)
+            
+            # この色をペイント色に設定
+            pick_action = QAction(f"この色を使用 RGB({current_color[0]}, {current_color[1]}, {current_color[2]})", self)
+            pick_action.triggered.connect(lambda: self.pick_color_for_paint(rgb_color, None))
+            
+            # 色変更ダイアログを表示
+            change_action = QAction("この位置の色を変更...", self)
+            change_action.triggered.connect(lambda: self.show_color_dialog_simple(rgb_color, grid_x, grid_y))
+            
+            # 透明にする
+            is_transparent = tuple(current_color) == (0, 0, 0)
+            transparent_action = QAction("透明にする", self)
+            transparent_action.setEnabled(not is_transparent)  # 既に透明なら無効化
+            transparent_action.triggered.connect(lambda: self.set_transparent_color_simple(grid_x, grid_y))
+            
+            # メニューにアクションを追加
+            menu.addAction(pick_action)
+            menu.addAction(change_action)
+            menu.addAction(transparent_action)
+            
+            # カーソル位置にメニューを表示
+            from PyQt5.QtGui import QCursor
+            menu.exec_(QCursor.pos())
+            
         except IndexError as e:
             print(f"座標変換エラー: {e}")
             return
-        
-        # 色選択オプションを作成
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox
-        
-        dialog = QDialog(self)
-        dialog.setWindowTitle("ドットの色を選択")
-        layout = QVBoxLayout(dialog)
-        
-        # 透過色（透明）オプション
-        transparent_check = QCheckBox("透過色（透明）に設定")
-        is_transparent = tuple(current_color) == (0, 0, 0)  # 黒色（0,0,0）を透過色として扱う
-        transparent_check.setChecked(is_transparent)
-        layout.addWidget(transparent_check)
-        
-        # カラーピッカーとして使用ボタン
-        pick_btn = QPushButton("この色をペイント色に設定")
-        pick_btn.clicked.connect(lambda: self.pick_color_for_paint(rgb_color, dialog))
-        
-        # 色選択ダイアログボタン
-        color_btn = QPushButton("色を選択")
-        color_btn.clicked.connect(lambda: self.show_color_dialog(rgb_color, grid_x, grid_y, dialog, transparent_check))
-        
-        # 透明にするボタン
-        transparent_btn = QPushButton("透明にする")
-        transparent_btn.clicked.connect(lambda: self.set_transparent_color(grid_x, grid_y, dialog))
-        
-        # キャンセルボタン
-        cancel_btn = QPushButton("キャンセル")
-        cancel_btn.clicked.connect(dialog.reject)
-        
-        # ボタンレイアウト
-        pick_layout = QHBoxLayout()
-        pick_layout.addWidget(pick_btn)
-        
-        btn_layout = QHBoxLayout()
-        btn_layout.addWidget(color_btn)
-        btn_layout.addWidget(transparent_btn)
-        btn_layout.addWidget(cancel_btn)
-        
-        layout.addLayout(pick_layout)
-        layout.addLayout(btn_layout)
-        
-        # ダイアログを表示
-        dialog.exec_()
     
-    def pick_color_for_paint(self, color, dialog):
+    def pick_color_for_paint(self, color, dialog=None):
         """選択したドットの色をペイント色として設定"""
         self.current_paint_color = color
         self.set_button_color(self.color_pick_btn, color)
-        dialog.accept()
+        # 透明色モードが有効なら無効化
+        if self.transparent_btn.isChecked():
+            self.transparent_btn.setChecked(False)
+        if dialog:
+            dialog.accept()
         
+    def show_color_dialog_simple(self, current_color, grid_x, grid_y):
+        """シンプル版の色選択ダイアログ（コンテキストメニュー用）"""
+        if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
+            return
+            
+        color_dialog = QColorDialog(self)
+        color_dialog.setCurrentColor(current_color)
+        color_dialog.setOption(QColorDialog.ShowAlphaChannel, True)
+        
+        if color_dialog.exec_():
+            new_color = color_dialog.selectedColor()
+            if new_color.isValid():
+                try:
+                    # 編集前の状態を履歴に保存
+                    self.save_edit_history()
+                    
+                    # NumPy配列は[row, col]=[y, x]の順でアクセス
+                    array_y = grid_y
+                    array_x = grid_x
+                    
+                    # 新しい色をRGB値に変換
+                    new_rgb = [new_color.red(), new_color.green(), new_color.blue()]
+                    
+                    # ピクセルの色を更新
+                    self.pixels_rounded_np[array_y, array_x] = new_rgb
+                    
+                    # プレビューを更新
+                    self.update_preview(custom_pixels=self.pixels_rounded_np)
+                except Exception as e:
+                    print(f"色設定エラー: {str(e)}")
+    
     def show_color_dialog(self, current_color, grid_x, grid_y, parent_dialog, transparent_check):
-        """色選択ダイアログを表示"""
+        """色選択ダイアログを表示（旧処理）"""
         if self.pixels_rounded_np is None:
             print("エラー: pixels_rounded_np がNoneです")
             parent_dialog.reject()
@@ -1261,19 +1291,13 @@ class DotPlateApp(QMainWindow):
                     transparent_check.setChecked(False)
                     
                     # NumPy配列は[row, col]=[y, x]の順でアクセス
-                    # クリック座標(x,y)を入れ替えて[y,x]の順でアクセスする
-                    array_y = grid_y  # Y軸は反転しない
-                    array_x = grid_x  # X軸はそのまま
-                    
-                    print(f"色変更: クリック位置(x,y)=({grid_x}, {grid_y}) → 配列アクセス[y,x]=[{array_y}, {array_x}]")
+                    array_y = grid_y
+                    array_x = grid_x
                     
                     # 新しい色の確認
                     new_rgb = [new_color.red(), new_color.green(), new_color.blue()]
-                    print(f"新しい色: RGB({new_rgb[0]}, {new_rgb[1]}, {new_rgb[2]})")
-                    print(f"更新座標: np配列[{array_y}, {array_x}] (行,列=[y,x]順)")
                     
-                    # ピクセルの色を更新 - numpy配列は[row, column] = [y, x]の順でアクセス
-                    # つまり、クリック位置(16, 18)なら配列[18, 16]にアクセスする
+                    # ピクセルの色を更新
                     self.pixels_rounded_np[array_y, array_x] = new_rgb
                     
                     # プレビューを更新（編集したピクセルデータを使用）
@@ -1285,8 +1309,29 @@ class DotPlateApp(QMainWindow):
                     print(f"色設定エラー: {str(e)}")
                     parent_dialog.reject()
                 
+    def set_transparent_color_simple(self, grid_x, grid_y):
+        """ドットを透明（黒色=0,0,0）に設定 - シンプル版"""
+        if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
+            return
+        
+        # 編集前の状態を履歴に保存
+        self.save_edit_history()
+        
+        # NumPy配列は[row, col]=[y, x]の順でアクセス
+        array_y = grid_y
+        array_x = grid_x
+        
+        try:
+            # 透過色を黒（0,0,0）として扱う
+            self.pixels_rounded_np[array_y, array_x] = [0, 0, 0]
+            
+            # プレビューを更新
+            self.update_preview(custom_pixels=self.pixels_rounded_np)
+        except Exception as e:
+            print(f"透明色設定エラー: {str(e)}")
+    
     def set_transparent_color(self, grid_x, grid_y, dialog):
-        """ドットを透明（黒色=0,0,0）に設定"""
+        """ドットを透明（黒色=0,0,0）に設定 - ダイアログ版（旧処理）"""
         if self.pixels_rounded_np is None:
             print("エラー: pixels_rounded_np がNoneです")
             dialog.reject()
@@ -1302,15 +1347,13 @@ class DotPlateApp(QMainWindow):
         self.save_edit_history()
         
         # NumPy配列は[row, col]=[y, x]の順でアクセス
-        # クリック座標(x,y)を入れ替えて[y,x]の順でアクセスする
-        array_y = grid_y  # Y軸は反転しない
-        array_x = grid_x  # X軸はそのまま
+        array_y = grid_y
+        array_x = grid_x
         
         print(f"透明化: クリック位置(x,y)=({grid_x}, {grid_y}) → 配列アクセス[y,x]=[{array_y}, {array_x}]")
             
         try:
             # 透過色を黒（0,0,0）として扱う
-            print(f"透明化座標: np配列[{array_y}, {array_x}] (行,列=[y,x]順)")
             self.pixels_rounded_np[array_y, array_x] = [0, 0, 0]
             
             # プレビューを更新
