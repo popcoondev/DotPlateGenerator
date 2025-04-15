@@ -249,44 +249,46 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # 壁ボックスのリスト
                 wall_boxes = []
                 
-                # まず左右方向の壁を設定（基本は内壁）
-                # 左側の壁
-                if is_left_edge:  # 左端または左が空白（外周）
+                # 左側の壁 - 同じ色の場合は壁を作らない
+                if is_left_edge:  # 左端または左が空白または隣接ドットが異なる色（外周）
                     wall_boxes.append(lr_outer_wall_boxes[0])  # 厚い外周壁
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     wall_boxes.append(lr_wall_boxes[0])  # 通常の内側壁
+                # merge_same_color=True かつ同色の場合は壁を追加しない
                 
-                # 右側の壁
-                if is_right_edge:  # 右端または右が空白（外周）
+                # 右側の壁 - 同じ色の場合は壁を作らない
+                if is_right_edge:  # 右端または右が空白または隣接ドットが異なる色（外周）
                     wall_boxes.append(lr_outer_wall_boxes[1])  # 厚い外周壁
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     wall_boxes.append(lr_wall_boxes[1])  # 通常の内側壁
+                # merge_same_color=True かつ同色の場合は壁を追加しない
                 
-                # 次に上下方向の壁を設定
-                # 上側の壁
-                if is_top_edge:  # 上端または上が空白（外周）
+                # 上側の壁 - 同じ色の場合は壁を作らない
+                if is_top_edge:  # 上端または上が空白または隣接ドットが異なる色（外周）
                     wall_boxes.append(tb_outer_wall_boxes[0])  # 厚い外周壁
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     wall_boxes.append(tb_wall_boxes[0])  # 通常の内側壁
+                # merge_same_color=True かつ同色の場合は壁を追加しない
                 
-                # 下側の壁
-                if is_bottom_edge:  # 下端または下が空白（外周）
+                # 下側の壁 - 同じ色の場合は壁を作らない
+                if is_bottom_edge:  # 下端または下が空白または隣接ドットが異なる色（外周）
                     wall_boxes.append(tb_outer_wall_boxes[1])  # 厚い外周壁
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     wall_boxes.append(tb_wall_boxes[1])  # 通常の内側壁
+                # merge_same_color=True かつ同色の場合は壁を追加しない
                 
                 # 壁の位置を設定する
                 positions = []
                 
-                # 左側の壁の位置
-                if is_left_edge:  # 左端または左が空白（外周）
+                # 左側の壁の位置 - wall_boxesに追加された分だけ位置も計算
+                if is_left_edge:  # 左端または左が空白または隣接ドットが異なる色（外周）
                     # 左外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x0 - extend_left + (wall_thickness + out_thickness) / 2, 
                         y_center,  # ベースの中心Y座標を使用
                         base_height + wall_height / 2
                     ])
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     # 通常の左内側壁
                     positions.append([
                         x0 + wall_thickness / 2,
@@ -294,15 +296,15 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         base_height + wall_height / 2
                     ])
                 
-                # 右側の壁の位置
-                if is_right_edge:  # 右端または右が空白（外周）
+                # 右側の壁の位置 - wall_boxesに追加された分だけ位置も計算
+                if is_right_edge:  # 右端または右が空白または隣接ドットが異なる色（外周）
                     # 右外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x0 + dot_size + extend_right - (wall_thickness + out_thickness) / 2,
                         y_center,
                         base_height + wall_height / 2
                     ])
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     # 通常の右内側壁
                     positions.append([
                         x0 + dot_size - wall_thickness / 2,
@@ -310,15 +312,15 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         base_height + wall_height / 2
                     ])
                 
-                # 上側の壁の位置
-                if is_top_edge:  # 上端または上が空白（外周）
+                # 上側の壁の位置 - wall_boxesに追加された分だけ位置も計算
+                if is_top_edge:  # 上端または上が空白または隣接ドットが異なる色（外周）
                     # 上外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x_center,  # ベースの中心X座標を使用
                         y0 + dot_size + extend_top - (wall_thickness + out_thickness) / 2,
                         base_height + wall_height / 2
                     ])
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     # 通常の上内側壁
                     positions.append([
                         x_center,
@@ -326,15 +328,15 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                         base_height + wall_height / 2
                     ])
                 
-                # 下側の壁の位置
-                if is_bottom_edge:  # 下端または下が空白（外周）
+                # 下側の壁の位置 - wall_boxesに追加された分だけ位置も計算
+                if is_bottom_edge:  # 下端または下が空白または隣接ドットが異なる色（外周）
                     # 下外周壁の位置（外側に厚みを追加）
                     positions.append([
                         x_center,
                         y0 - extend_bottom + (wall_thickness + out_thickness) / 2,
                         base_height + wall_height / 2
                     ])
-                else:
+                elif not merge_same_color:  # 同色でも壁を作る場合
                     # 通常の下内側壁
                     positions.append([
                         x_center,
