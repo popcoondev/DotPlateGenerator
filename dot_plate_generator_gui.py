@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout, QDoubleSpinBox,
     QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
-    QColorDialog
+    QColorDialog, QCheckBox
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QPixmap, QImage, QColor
@@ -131,6 +131,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                            wall_thickness, wall_height, base_height,
                            color_step, top_color_limit, out_thickness=0.1, 
                            wall_color=(255, 255, 255), # 壁の色（デフォルトは白）
+                           merge_same_color=False,     # 同じ色のドット間の内壁を省略するオプション
                            return_colors=False):
     img = Image.open(image_path).convert("RGB")
     img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
@@ -163,10 +164,22 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 has_bottom = y < grid_size - 1 and mask[y+1, x]
                 
                 # 外周条件の確認（これは壁の生成に使用）
-                is_left_edge = x == 0 or not mask[y, x-1]
-                is_right_edge = x == grid_size - 1 or not mask[y, x+1]
-                is_top_edge = y == 0 or not mask[y-1, x]
-                is_bottom_edge = y == grid_size - 1 or not mask[y+1, x]
+                if merge_same_color:
+                    # 同じ色のドット間には壁を作らない場合の条件
+                    is_left_edge = (x == 0 or not mask[y, x-1] or 
+                                   (mask[y, x-1] and tuple(pixels_rounded_np[y, x-1]) != pixel_color))
+                    is_right_edge = (x == grid_size - 1 or not mask[y, x+1] or 
+                                    (mask[y, x+1] and tuple(pixels_rounded_np[y, x+1]) != pixel_color))
+                    is_top_edge = (y == 0 or not mask[y-1, x] or 
+                                  (mask[y-1, x] and tuple(pixels_rounded_np[y-1, x]) != pixel_color))
+                    is_bottom_edge = (y == grid_size - 1 or not mask[y+1, x] or 
+                                     (mask[y+1, x] and tuple(pixels_rounded_np[y+1, x]) != pixel_color))
+                else:
+                    # 従来通り、隣接するドットとの間に常に壁を作る
+                    is_left_edge = x == 0 or not mask[y, x-1]
+                    is_right_edge = x == grid_size - 1 or not mask[y, x+1]
+                    is_top_edge = y == 0 or not mask[y-1, x]
+                    is_bottom_edge = y == grid_size - 1 or not mask[y+1, x]
                 
                 # 各方向の拡張量を計算
                 extend_left = 0 if has_left else out_thickness
@@ -675,7 +688,14 @@ class DotPlateApp(QMainWindow):
         wall_color_layout.addWidget(self.wall_color_button)
         wall_color_layout.addStretch()
         
+        # 同じ色のドット間の内壁を省略するオプション
+        self.merge_same_color_checkbox = QCheckBox("同じ色のドット間の内壁を省略")
+        self.merge_same_color_checkbox.setChecked(False)  # デフォルトはオフ
+        self.merge_same_color_checkbox.setToolTip("このオプションを有効にすると、同じ色のドット同士の間の内壁が作られなくなります。")
+        
+        # レイアウトに追加
         param_layout.addLayout(wall_color_layout)
+        param_layout.addWidget(self.merge_same_color_checkbox)
         
         self.param_grid = QGridLayout()
         self.controls = {}
@@ -1333,6 +1353,9 @@ class DotPlateApp(QMainWindow):
                         custom_img = Image.fromarray(custom_pixels, mode='RGB')
                         custom_img.save(tmp_path)
                     
+                    # 同じ色のドット間の内壁を省略するオプションの状態を取得
+                    merge_same_color = self.merge_same_color_checkbox.isChecked()
+                    
                     # 生成された一時画像を使用してSTLを生成
                     mesh = generate_dot_plate_stl(
                         tmp_path,  # 一時画像パス
@@ -1346,6 +1369,7 @@ class DotPlateApp(QMainWindow):
                         1000,  # 上位色制限は高く設定（全ての色を使用）
                         float(params["Out Thickness"]),
                         wall_color=wall_color,  # 選択した壁の色を使用
+                        merge_same_color=merge_same_color,  # 同色間の内壁省略オプション
                         return_colors=True  # メッシュを返すように指定
                     )
                     
@@ -1353,6 +1377,9 @@ class DotPlateApp(QMainWindow):
                     import os
                     os.unlink(tmp_path)
                 else:
+                    # 同じ色のドット間の内壁を省略するオプションの状態を取得
+                    merge_same_color = self.merge_same_color_checkbox.isChecked()
+                    
                     # 元の画像から新たにSTLを生成
                     mesh = generate_dot_plate_stl(
                         self.image_path,
@@ -1366,6 +1393,7 @@ class DotPlateApp(QMainWindow):
                         int(params["Top Colors"]),
                         float(params["Out Thickness"]),
                         wall_color=wall_color,  # 選択した壁の色を使用
+                        merge_same_color=merge_same_color,  # 同色間の内壁省略オプション
                         return_colors=True  # メッシュを返すように指定
                     )
                 
