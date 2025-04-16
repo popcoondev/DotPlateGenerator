@@ -15,22 +15,27 @@ from PyQt5.QtWidgets import (
     QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
     QColorDialog, QCheckBox, QComboBox, QMenu, QAction
 )
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QPixmap, QImage, QColor
 from shapely.geometry import Polygon
 from skimage import measure
 from io import BytesIO
 import threading
 import time
+import tempfile
 
 # Vedoをインポート (VTKベースの3D可視化ライブラリ)
-try:
-    import vedo
-    VEDO_AVAILABLE = True
-except ImportError:
-    print("vedo library not available, please install with: pip install vedo")
-    import matplotlib.pyplot as plt
-    VEDO_AVAILABLE = False
+# Matplotlibを常に使用するように変更
+import matplotlib.pyplot as plt
+VEDO_AVAILABLE = False
+
+# try:
+#     import vedo
+#     VEDO_AVAILABLE = True
+# except ImportError:
+#     print("vedo library not available, please install with: pip install vedo")
+#     import matplotlib.pyplot as plt
+#     VEDO_AVAILABLE = False
 
 # -------------------------------
 # 補助関数
@@ -185,7 +190,7 @@ def get_octree_palette(pixels, num_colors):
         return get_median_cut_palette(pixels, num_colors)
 
 def generate_preview_image(image_path, grid_size, color_step, top_color_limit, zoom_factor=10, 
-                       custom_pixels=None, highlight_pos=None, hover_pos=None, color_algo="simple"):
+                       custom_pixels=None, highlight_pos=None, hover_pos=None, color_algo="simple", highlight_color=None):
     """
     プレビュー画像を生成する関数
     
@@ -199,6 +204,7 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
         highlight_pos: ハイライトする位置
         hover_pos: ホバー中の位置
         color_algo: 減色アルゴリズム ("simple", "median_cut", "kmeans", "octree")
+        highlight_color: ハイライトする色 (r, g, b)形式
     """
     # 型チェックと値チェック
     if not isinstance(grid_size, int) or grid_size <= 0:
@@ -317,6 +323,17 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
     # 選択されたドットを強調ハイライト表示
     if highlight_pos is not None:
         draw_grid_highlight(highlight_pos, (255, 0, 0, 255), width_factor=10)  # 赤色の枠線
+    
+    # 特定の色を持つドットをすべてハイライト
+    if highlight_color is not None:
+        r, g, b = highlight_color
+        # 一致する色を探す
+        for y in range(grid_size):
+            for x in range(grid_size):
+                pixel_color = tuple(pixels_array[y, x])
+                if pixel_color == (r, g, b):
+                    # 色が一致するドットにハイライト
+                    draw_grid_highlight((x, y), (255, 0, 0, 255), width_factor=15)  # 赤色の枠線
     
     return result
 
@@ -625,6 +642,201 @@ class ParameterHelpDialog(QDialog):
 # GUI クラス
 # -------------------------------
 class DotPlateApp(QMainWindow):
+    # 色ハイライトと置換のための新しいメソッド
+    def on_color_cell_clicked(self, url):
+        """色セルがクリックされたときのハンドラー"""
+        if url.startswith('color://'):
+            # URL形式： color://r,g,b
+            color_part = url.split('://')[-1]
+            try:
+                r, g, b = map(int, color_part.split(','))
+                target_color = (r, g, b)
+                
+                # この色のドットをハイライト表示
+                self.highlight_dots_with_color(target_color)
+                
+                # 色置換ダイアログを表示
+                self.show_replace_color_dialog(target_color)
+                
+            except ValueError as e:
+                print(f"色パース中のエラー: {str(e)}")
+    
+    def highlight_dots_with_color(self, target_color):
+        """指定された色を持つすべてのドットをハイライト表示する"""
+        if self.pixels_rounded_np is None:
+            return
+            
+        # 現在のパラメータ取得
+        params = {key: spin.value() for key, spin in self.controls.items()}
+        
+        # ハイライト表示用の一時的なピクセルデータを作成
+        highlighted_pixels = self.pixels_rounded_np.copy()
+        r, g, b = target_color
+        
+        # ハイライトする色を保存
+        self.highlighted_color = target_color
+        
+        try:
+            # プレビュー更新（ハイライト表示）
+            preview_img = generate_preview_image(
+                self.image_path,
+                self.current_grid_size,
+                int(params["Color Step"]),
+                int(params["Top Colors"]),
+                self.zoom_factor,
+                custom_pixels=highlighted_pixels,
+                highlight_color=target_color  # ハイライト色を指定
+            )
+            
+            # プレビュー画像を更新（QPixmapに変換）
+            preview_buffer = BytesIO()
+            preview_img.save(preview_buffer, format="PNG")
+            preview_qimg = QImage()
+            preview_qimg.loadFromData(preview_buffer.getvalue())
+            preview_pixmap = QPixmap.fromImage(preview_qimg)
+            
+            # ラベルに表示
+            self.preview_label.setPixmap(preview_pixmap)
+            
+            # 1秒後にハイライトを消す
+            self.highlight_timer.start(1000)
+            
+        except Exception as e:
+            print(f"ハイライト表示エラー: {str(e)}")
+    
+    def clear_color_highlight(self):
+        """色のハイライト表示をクリアする"""
+        if hasattr(self, 'highlighted_color'):
+            delattr(self, 'highlighted_color')
+        
+        # 通常のプレビュー表示に戻す
+        self.update_preview()
+    
+    def show_replace_color_dialog(self, target_color):
+        """色置換のためのダイアログを表示"""
+        if self.pixels_rounded_np is None:
+            return
+            
+        r, g, b = target_color
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        
+        # ダイアログ作成
+        dialog = QDialog(self)
+        dialog.setWindowTitle("色置換")
+        dialog.setMinimumWidth(300)
+        
+        # レイアウト
+        layout = QVBoxLayout(dialog)
+        
+        # 情報ラベル
+        info_label = QLabel(f"選択した色: RGB({r}, {g}, {b}) {hex_color}")
+        layout.addWidget(info_label)
+        
+        # 色表示
+        color_preview = QLabel()
+        color_preview.setFixedSize(40, 40)
+        color_preview.setStyleSheet(f"background-color: {hex_color}; border: 1px solid #aaa;")
+        layout.addWidget(color_preview)
+        
+        # 新しい色選択ボタン
+        color_btn = QPushButton("新しい色を選択")
+        layout.addWidget(color_btn)
+        
+        # 透明に変更ボタン
+        transparent_btn = QPushButton("透明に変更")
+        layout.addWidget(transparent_btn)
+        
+        # ボタン
+        btn_layout = QHBoxLayout()
+        cancel_btn = QPushButton("キャンセル")
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        # シグナル接続
+        def on_select_new_color():
+            new_color = QColorDialog.getColor(QColor(r, g, b), dialog, "新しい色を選択")
+            if new_color.isValid():
+                # 色を置換
+                self.replace_all_same_color(target_color, (new_color.red(), new_color.green(), new_color.blue()))
+                dialog.accept()
+        
+        def on_set_transparent():
+            # 透明色に置換（黒=0,0,0として扱う）
+            self.replace_all_same_color(target_color, (0, 0, 0))
+            dialog.accept()
+        
+        color_btn.clicked.connect(on_select_new_color)
+        transparent_btn.clicked.connect(on_set_transparent)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        # ダイアログを表示
+        dialog.exec_()
+    
+    def replace_all_same_color(self, target_color, new_color):
+        """同じ色を持つすべてのドットを一括置換する"""
+        if self.pixels_rounded_np is None:
+            return
+            
+        # 編集履歴を保存
+        self.save_edit_history()
+        
+        # ピクセルデータのコピーを作成
+        modified_pixels = self.pixels_rounded_np.copy()
+        
+        # 指定された色と一致するピクセルを検索して置換
+        r, g, b = target_color
+        target_mask = (modified_pixels[:, :, 0] == r) & (modified_pixels[:, :, 1] == g) & (modified_pixels[:, :, 2] == b)
+        
+        # 新しい色で置換
+        nr, ng, nb = new_color
+        modified_pixels[target_mask, 0] = nr
+        modified_pixels[target_mask, 1] = ng
+        modified_pixels[target_mask, 2] = nb
+        
+        # 変更を適用
+        self.pixels_rounded_np = modified_pixels
+        
+        # プレビューを更新
+        self.update_preview(custom_pixels=modified_pixels)
+        
+        # STLプレビューも更新（現在のパラメータを使用）
+        try:
+            # 一時ファイルを生成
+            with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            
+            # 現在のパラメータを取得
+            params = {key: spin.value() for key, spin in self.controls.items()}
+            
+            # STLを一時ファイルに生成
+            preview_mesh = generate_dot_plate_stl(
+                self.image_path,
+                tmp_path,
+                self.current_grid_size,
+                float(params["Dot Size"]), 
+                float(params["Base Height"]),
+                float(params["Wall Height"]),
+                float(params["Wall Thickness"]),
+                self.pixels_rounded_np
+            )
+            
+            # STLプレビューを更新
+            self.show_stl_preview(preview_mesh)
+            
+            # 後片付け
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+        except Exception as e:
+            print(f"STLプレビュー更新エラー: {str(e)}")
+        
+        # ステータスバー更新
+        count = np.sum(target_mask)
+        if count > 0:
+            self.statusBar().showMessage(f"{count}個のドットの色をRGB({r}, {g}, {b})からRGB({nr}, {ng}, {nb})に変更しました")
+        else:
+            self.statusBar().showMessage("該当する色のドットは見つかりませんでした")
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Dot Plate Generator")
@@ -1140,14 +1352,23 @@ class DotPlateApp(QMainWindow):
         info_scroll.setMaximumHeight(250)  # 最大高さを増やす
         info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 横スクロールバーを非表示
         
-        # STL情報ラベル
+        # STL情報ラベル（クリック可能なHTML表示）
         self.stl_info_label = QLabel("STL情報が表示されます")
         self.stl_info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.stl_info_label.setWordWrap(True)
         self.stl_info_label.setTextFormat(Qt.RichText)
         self.stl_info_label.setMargin(5)
+        self.stl_info_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.stl_info_label.setOpenExternalLinks(False)
         # スクロールビュー内でテーブルが幅いっぱいに表示されるようサイズポリシーを設定
         self.stl_info_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # カラーセルのクリックイベントを接続
+        self.stl_info_label.linkActivated.connect(self.on_color_cell_clicked)
+        
+        # 色ハイライト用のタイマー
+        self.highlight_timer = QTimer(self)
+        self.highlight_timer.setSingleShot(True)
+        self.highlight_timer.timeout.connect(self.clear_color_highlight)
         
         # スクロールエリアにラベルを設定
         info_scroll.setWidget(self.stl_info_label)
@@ -1522,10 +1743,16 @@ class DotPlateApp(QMainWindow):
             transparent_action.setEnabled(not is_transparent)  # 既に透明なら無効化
             transparent_action.triggered.connect(lambda: self.set_transparent_color_simple(grid_x, grid_y))
             
+            # 同じ色のドットをすべて置換する
+            replace_action = QAction("同じ色のすべてのドットを置換...", self)
+            replace_action.setEnabled(not is_transparent)  # 透明色なら無効化
+            replace_action.triggered.connect(lambda: self.replace_all_same_color(current_color))
+            
             # メニューにアクションを追加
             menu.addAction(pick_action)
             menu.addAction(change_action)
             menu.addAction(transparent_action)
+            menu.addAction(replace_action)
             
             # カーソル位置にメニューを表示
             from PyQt5.QtGui import QCursor
@@ -2316,10 +2543,20 @@ class DotPlateApp(QMainWindow):
                     volume = color_volumes[color]
                     hex_color = f"#{r:02x}{g:02x}{b:02x}"
                     
+                    # 色情報とともにURLリンクを埋め込み（クリック可能にする）
+                    color_id = f"color_{r}_{g}_{b}"  # リンク識別用のID
                     info_html += f"""
                     <tr>
-                        <td class="color-column"><div class="color-cell" style="background-color: {hex_color};"></div></td>
-                        <td class="rgb-column">({r}, {g}, {b})</td>
+                        <td class="color-column">
+                            <a href="color://{r},{g},{b}" title="この色を持つドットをハイライト表示">
+                                <div class="color-cell" style="background-color: {hex_color};"></div>
+                            </a>
+                        </td>
+                        <td class="rgb-column">
+                            <a href="color://{r},{g},{b}" title="この色を持つドットをハイライト表示">
+                                ({r}, {g}, {b})
+                            </a>
+                        </td>
                         <td class="count-column">{count}</td>
                         <td class="volume-column">{volume:.2f}</td>
                     </tr>
