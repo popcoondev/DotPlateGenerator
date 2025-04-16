@@ -1065,7 +1065,7 @@ class DotPlateApp(QMainWindow):
         
         # パラメータ定義
         parameters = [
-            ("Grid Size", 32, 8, 64),
+            ("Grid Size", 32, 8, 128),
             ("Dot Size", 2.0, 0.2, 5.0),
             ("Wall Thickness", 0.2, 0.0, 5.0),
             ("Wall Height", 0.4, 0.0, 5.0),
@@ -1758,7 +1758,7 @@ class DotPlateApp(QMainWindow):
             # 同じ色のドットをすべて置換する
             replace_action = QAction("同じ色のすべてのドットを置換...", self)
             replace_action.setEnabled(not is_transparent)  # 透明色なら無効化
-            replace_action.triggered.connect(lambda: self.replace_all_same_color(current_color))
+            replace_action.triggered.connect(lambda: self.show_replace_color_dialog(current_color))
             
             # メニューにアクションを追加
             menu.addAction(pick_action)
@@ -1784,6 +1784,22 @@ class DotPlateApp(QMainWindow):
         if dialog:
             dialog.accept()
         
+    def show_replace_color_dialog(self, target_color):
+        """同じ色のすべてのドットを置換するためのダイアログを表示"""
+        if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
+            return
+            
+        color_dialog = QColorDialog(self)
+        color_dialog.setWindowTitle("新しい色を選択")
+        color_dialog.setOption(QColorDialog.ShowAlphaChannel, True)
+        
+        if color_dialog.exec_():
+            new_color = color_dialog.selectedColor()
+            if new_color.isValid():
+                # (r,g,b)形式に変換
+                rgb_new_color = (new_color.red(), new_color.green(), new_color.blue())
+                self.replace_all_same_color(target_color, rgb_new_color)
+    
     def show_color_dialog_simple(self, current_color, grid_x, grid_y):
         """シンプル版の色選択ダイアログ（コンテキストメニュー用）"""
         if self.pixels_rounded_np is None or not isinstance(self.pixels_rounded_np, np.ndarray):
