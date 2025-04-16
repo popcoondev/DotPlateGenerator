@@ -698,8 +698,8 @@ class DotPlateApp(QMainWindow):
             # ラベルに表示
             self.preview_label.setPixmap(preview_pixmap)
             
-            # 1秒後にハイライトを消す
-            self.highlight_timer.start(1000)
+            # ハイライトはダイアログが閉じるまで維持するので、タイマーは使わない
+            # self.highlight_timer.start(1000)
             
         except Exception as e:
             print(f"ハイライト表示エラー: {str(e)}")
@@ -759,15 +759,27 @@ class DotPlateApp(QMainWindow):
                 # 色を置換
                 self.replace_all_same_color(target_color, (new_color.red(), new_color.green(), new_color.blue()))
                 dialog.accept()
+                # ハイライトを解除
+                self.clear_color_highlight()
         
         def on_set_transparent():
             # 透明色に置換（黒=0,0,0として扱う）
             self.replace_all_same_color(target_color, (0, 0, 0))
             dialog.accept()
+            # ハイライトを解除
+            self.clear_color_highlight()
         
+        # キャンセル時もハイライトを解除
+        def on_cancel():
+            dialog.reject()
+            self.clear_color_highlight()
+            
         color_btn.clicked.connect(on_select_new_color)
         transparent_btn.clicked.connect(on_set_transparent)
-        cancel_btn.clicked.connect(dialog.reject)
+        cancel_btn.clicked.connect(on_cancel)
+        
+        # ダイアログが閉じられたときにもハイライトを解除（×ボタンなどの場合）
+        dialog.finished.connect(self.clear_color_highlight)
         
         # ダイアログを表示
         dialog.exec_()
