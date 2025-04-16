@@ -1123,6 +1123,24 @@ class DotPlateApp(QMainWindow):
         
         # 正方形ウィジェットをレイアウトに追加（中央揃え）
         stl_preview_layout.addWidget(square_widget, 0, Qt.AlignCenter)
+        
+        # STL情報表示部分
+        info_frame = QFrame()
+        info_frame.setFrameShape(QFrame.StyledPanel)
+        info_frame.setFrameShadow(QFrame.Sunken)
+        info_frame.setLineWidth(1)
+        info_layout = QVBoxLayout(info_frame)
+        
+        # STL情報ラベル
+        self.stl_info_label = QLabel("STL情報が表示されます")
+        self.stl_info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.stl_info_label.setWordWrap(True)
+        self.stl_info_label.setTextFormat(Qt.RichText)
+        info_layout.addWidget(self.stl_info_label)
+        
+        # 情報フレームをレイアウトに追加
+        stl_preview_layout.addWidget(info_frame)
+        
         stl_preview_group.setLayout(stl_preview_layout)
         column3_layout.addWidget(stl_preview_group)
         
@@ -2148,6 +2166,9 @@ class DotPlateApp(QMainWindow):
             else:
                 # MatplotlibでのプレビューにフォールバックAgg
                 self._show_stl_preview_matplotlib(mesh)
+            
+            # STL情報を表示
+            self.update_stl_info(mesh)
                 
             # 別スレッドで画像を保存
             self.input_label.setText(f"{self.input_label.text()} STLプレビュー画像を保存中...")
@@ -2169,6 +2190,83 @@ class DotPlateApp(QMainWindow):
                 print(f"stl_preview_label属性が見つかりません: {str(e)}")
             import traceback
             traceback.print_exc()
+            
+    def update_stl_info(self, mesh):
+        """STLの情報を計算して表示する"""
+        try:
+            # メッシュが存在しない場合は終了
+            if mesh is None:
+                self.stl_info_label.setText("STLデータがありません")
+                return
+                
+            # STLのサイズ情報を取得
+            bounds = mesh.bounds
+            min_bounds = bounds[0]
+            max_bounds = bounds[1]
+            
+            width = max_bounds[0] - min_bounds[0]  # X方向の幅
+            depth = max_bounds[1] - min_bounds[1]  # Y方向の深さ
+            height = max_bounds[2] - min_bounds[2]  # Z方向の高さ
+            
+            # ドット数の計算（グリッドサイズから）
+            params = {key: spin.value() for key, spin in self.controls.items()}
+            grid_size = int(params["Grid Size"])
+            total_dots = 0
+            color_counts = {}
+            total_volume = 0
+            
+            # 現在のピクセルデータがあれば、それを使ってドット数と色の分布を計算
+            if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+                # 透明でないピクセルをカウント (RGB(0,0,0)は透明として扱う)
+                non_transparent_mask = (self.pixels_rounded_np != 0).any(axis=2)
+                total_dots = np.sum(non_transparent_mask)
+                
+                # 色ごとのドット数をカウント
+                colors = [tuple(pixel) for pixel in self.pixels_rounded_np.reshape(-1, 3) 
+                         if tuple(pixel) != (0, 0, 0)]
+                color_counts = Counter(colors)
+                
+                # 色の数
+                unique_colors = len(color_counts)
+                
+                # 体積計算（ドットのサイズと各色のドット数から概算）
+                dot_size = float(params["Dot Size"])
+                dot_height = float(params["Wall Height"]) + float(params["Base Height"])
+                dot_volume = dot_size * dot_size * dot_height  # mm³
+                total_volume = total_dots * dot_volume
+            else:
+                # ピクセルデータがない場合は推定
+                total_dots = "不明"
+                unique_colors = "不明"
+                
+            # 情報テキストの組み立て
+            info_html = f"""
+            <html>
+            <body>
+            <style>
+                table {{ border-collapse: collapse; width: 100%; }}
+                th, td {{ padding: 4px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+            </style>
+            <table>
+                <tr><th colspan="2">STL情報</th></tr>
+                <tr><td>最大幅 (X):</td><td>{width:.2f} mm</td></tr>
+                <tr><td>最大奥行き (Y):</td><td>{depth:.2f} mm</td></tr>
+                <tr><td>最大高さ (Z):</td><td>{height:.2f} mm</td></tr>
+                <tr><td>ドット数:</td><td>{total_dots}</td></tr>
+                <tr><td>使用色数:</td><td>{unique_colors}</td></tr>
+                <tr><td>推定体積:</td><td>{total_volume:.2f} mm³</td></tr>
+            </table>
+            </body>
+            </html>
+            """
+            
+            # 情報表示を更新
+            self.stl_info_label.setText(info_html)
+            
+        except Exception as e:
+            print(f"STL情報更新エラー: {str(e)}")
+            self.stl_info_label.setText(f"情報取得エラー: {str(e)}")
     
     def _show_stl_preview_vedo(self, mesh):
         """Vedoを使用したSTLプレビュー生成"""
