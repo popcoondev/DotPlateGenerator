@@ -119,6 +119,102 @@ def get_kmeans_palette(pixels, num_colors):
         
         return palette
 
+def get_toon_palette(pixels, num_colors):
+    """トゥーンアニメ風のパレットを生成する
+    
+    以下の特徴を持つ色パレットを生成：
+    1. 彩度が高く、明確な色を優先
+    2. 同系色での階調が少なく、はっきりとした色の差を作る
+    3. ベースカラー、シャドウ、ハイライトの3トーン構成
+    """
+    from skimage import color
+    
+    # RGBからHSVに変換して色相、彩度、明度を分析
+    hsv_pixels = color.rgb2hsv(pixels.reshape(-1, 1, 3))
+    hsv_pixels = hsv_pixels.reshape(-1, 3)
+    
+    # 彩度と明度に基づいて色をグループ化
+    # 高彩度領域を優先して選択
+    high_sat_mask = hsv_pixels[:, 1] > 0.4  # 彩度が高い色
+    high_sat_pixels = hsv_pixels[high_sat_mask]
+    
+    # 色相に基づいて主要な色を特定
+    n_hue_bins = max(3, num_colors // 3)  # 少なくとも3つの色相ビン
+    hist, bin_edges = np.histogram(hsv_pixels[:, 0], bins=n_hue_bins)
+    
+    # 最も頻度の高い色相ビンを特定
+    sorted_bins = np.argsort(-hist)
+    
+    # 主要な色相ごとに3トーン（ベース、シャドウ、ハイライト）を選定
+    palette = []
+    used_hues = set()
+    
+    # 主要な色相から色を選定
+    for bin_idx in sorted_bins:
+        if len(palette) >= num_colors:
+            break
+            
+        # このビンの色相範囲
+        h_min = bin_edges[bin_idx]
+        h_max = bin_edges[bin_idx + 1]
+        h_center = (h_min + h_max) / 2
+        
+        # 既に使用した色相と近すぎる場合はスキップ
+        if any(abs(h_center - h) < 0.05 for h in used_hues):
+            continue
+            
+        # この色相範囲内のピクセル
+        hue_mask = (hsv_pixels[:, 0] >= h_min) & (hsv_pixels[:, 0] < h_max)
+        bin_pixels = hsv_pixels[hue_mask]
+        
+        if len(bin_pixels) == 0:
+            continue
+            
+        # 彩度で上位の色を取得
+        sorted_sat_idx = np.argsort(-bin_pixels[:, 1])
+        
+        # 選択した色相でベース、シャドウ、ハイライトの3トーンを作成
+        if len(sorted_sat_idx) > 0:
+            base_hsv = bin_pixels[sorted_sat_idx[0]].copy()
+            base_hsv[1] = min(1.0, base_hsv[1] + 0.2)  # 彩度を少し上げる
+            base_hsv[2] = 0.6  # 中間の明度
+            
+            shadow_hsv = base_hsv.copy()
+            shadow_hsv[2] = 0.3  # 暗め
+            
+            highlight_hsv = base_hsv.copy()
+            highlight_hsv[2] = 0.9  # 明るめ
+            
+            # HSVからRGBに戻す
+            base_rgb = color.hsv2rgb(base_hsv.reshape(1, 1, 3)).reshape(3)
+            shadow_rgb = color.hsv2rgb(shadow_hsv.reshape(1, 1, 3)).reshape(3)
+            highlight_rgb = color.hsv2rgb(highlight_hsv.reshape(1, 1, 3)).reshape(3)
+            
+            # パレットに追加
+            palette.append(tuple((base_rgb * 255).astype(np.uint8)))
+            if len(palette) < num_colors:
+                palette.append(tuple((shadow_rgb * 255).astype(np.uint8)))
+            if len(palette) < num_colors:
+                palette.append(tuple((highlight_rgb * 255).astype(np.uint8)))
+                
+            used_hues.add(h_center)
+    
+    # 黒と白を追加（トゥーンアニメには必須）
+    if len(palette) < num_colors:
+        palette.append((0, 0, 0))  # 黒
+    if len(palette) < num_colors:
+        palette.append((255, 255, 255))  # 白
+        
+    # グレースケール階調を追加して残りを埋める
+    remaining = num_colors - len(palette)
+    if remaining > 0:
+        gray_step = 240 // (remaining + 1)
+        for i in range(1, remaining + 1):
+            gray_val = i * gray_step
+            palette.append((gray_val, gray_val, gray_val))
+    
+    return palette
+
 def get_octree_palette(pixels, num_colors):
     """オクトツリー量子化でカラーパレットを生成"""
     # 安全な実装のためのシンプルなアプローチ
@@ -842,6 +938,8 @@ class DotPlateApp(QMainWindow):
                         algo_index = 2
                     elif self.current_color_algo == "octree":
                         algo_index = 3
+                    elif self.current_color_algo == "toon":
+                        algo_index = 4
                     self.color_algo_combo.setCurrentIndex(algo_index)
             
             # ズーム係数を復元
@@ -1177,14 +1275,16 @@ class DotPlateApp(QMainWindow):
             "単純量子化 (Simple)", 
             "メディアンカット法 (Median Cut)", 
             "K-means法 (K-means)", 
-            "オクトツリー法 (Octree)"
+            "オクトツリー法 (Octree)",
+            "トゥーンアニメ風 (Toon)"
         ])
         self.color_algo_combo.setToolTip(
             "減色アルゴリズムの選択:\n"
             "・単純量子化: 最も高速で簡単なアルゴリズム\n"
             "・メディアンカット法: 色空間を分割し、各領域の代表色を使用\n"
             "・K-means法: 機械学習ベースの色のクラスタリング\n"
-            "・オクトツリー法: 色空間の階層的分割による高品質な減色"
+            "・オクトツリー法: 色空間の階層的分割による高品質な減色\n"
+            "・トゥーンアニメ風: 鮮やかな色とはっきりした色の差を持つアニメ風の配色"
         )
         self.color_algo_combo.currentIndexChanged.connect(self.on_color_algo_changed)
         
@@ -2314,7 +2414,8 @@ class DotPlateApp(QMainWindow):
             0: "simple",     # 単純量子化
             1: "median_cut", # メディアンカット法
             2: "kmeans",     # K-means法
-            3: "octree"      # オクトツリー法
+            3: "octree",     # オクトツリー法
+            4: "toon"        # トゥーンアニメ風
         }
         
         self.current_color_algo = algo_map.get(index, "simple")
@@ -2324,6 +2425,7 @@ class DotPlateApp(QMainWindow):
             "simple": "単純量子化アルゴリズムを使用します",
             "median_cut": "メディアンカット法（色空間分割による減色）を使用します",
             "kmeans": "K-means法（機械学習ベースのクラスタリング）を使用します",
+            "toon": "トゥーンアニメ風の鮮やかな色使いで減色します",
             "octree": "オクトツリー法（階層的色空間分割）を使用します"
         }
         
@@ -2498,6 +2600,22 @@ class DotPlateApp(QMainWindow):
                         # オクトツリー法
                         palette = get_octree_palette(pixels, int(params["Top Colors"]))
                         pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+                        
+                    elif self.current_color_algo == "toon":
+                        # トゥーンアニメ風
+                        try:
+                            palette = get_toon_palette(pixels, int(params["Top Colors"]))
+                            pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+                        except Exception as e:
+                            print(f"トゥーンアニメ風減色エラー: {str(e)}。単純アルゴリズムを使用します。")
+                            self.current_color_algo = "simple"
+                            self.color_algo_combo.setCurrentIndex(0)
+                            # 単純アルゴリズムでフォールバック
+                            pixels_normalized = normalize_colors(pixels, int(params["Color Step"]))
+                            colors = [tuple(c) for c in pixels_normalized]
+                            color_counts = Counter(colors)
+                            top_colors = [c for c, _ in color_counts.most_common(int(params["Top Colors"]))]
+                            pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
                         
                     else:
                         # デフォルトは単純アルゴリズム
