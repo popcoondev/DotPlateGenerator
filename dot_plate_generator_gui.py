@@ -1124,19 +1124,36 @@ class DotPlateApp(QMainWindow):
         # 正方形ウィジェットをレイアウトに追加（中央揃え）
         stl_preview_layout.addWidget(square_widget, 0, Qt.AlignCenter)
         
-        # STL情報表示部分
+        # STL情報表示部分（スクロール可能）
         info_frame = QFrame()
         info_frame.setFrameShape(QFrame.StyledPanel)
         info_frame.setFrameShadow(QFrame.Sunken)
         info_frame.setLineWidth(1)
         info_layout = QVBoxLayout(info_frame)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # スクロールエリアを追加
+        info_scroll = QScrollArea()
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setFrameShape(QFrame.NoFrame)
+        info_scroll.setMinimumHeight(180)  # やや高めに設定
+        info_scroll.setMaximumHeight(250)  # 最大高さを増やす
+        info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 横スクロールバーを非表示
         
         # STL情報ラベル
         self.stl_info_label = QLabel("STL情報が表示されます")
         self.stl_info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.stl_info_label.setWordWrap(True)
         self.stl_info_label.setTextFormat(Qt.RichText)
-        info_layout.addWidget(self.stl_info_label)
+        self.stl_info_label.setMargin(5)
+        # スクロールビュー内でテーブルが幅いっぱいに表示されるようサイズポリシーを設定
+        self.stl_info_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # スクロールエリアにラベルを設定
+        info_scroll.setWidget(self.stl_info_label)
+        
+        # スクロールエリアをフレームに追加
+        info_layout.addWidget(info_scroll)
         
         # 情報フレームをレイアウトに追加
         stl_preview_layout.addWidget(info_frame)
@@ -2255,10 +2272,15 @@ class DotPlateApp(QMainWindow):
             <html>
             <body>
             <style>
-                table {{ border-collapse: collapse; width: 100%; }}
-                th, td {{ padding: 4px; text-align: left; }}
+                body {{ margin: 0; padding: 0; width: 100%; }}
+                table {{ border-collapse: collapse; width: 100%; margin-bottom: 8px; table-layout: fixed; }}
+                th, td {{ padding: 5px; text-align: left; border: 1px solid #ddd; overflow: hidden; }}
                 th {{ background-color: #f2f2f2; }}
-                .color-cell {{ width: 15px; height: 15px; display: inline-block; border: 1px solid #ccc; }}
+                .color-cell {{ width: 20px; height: 20px; display: inline-block; border: 1px solid #ccc; border-radius: 3px; }}
+                .color-column {{ width: 10%; }}
+                .rgb-column {{ width: 30%; }}
+                .count-column {{ width: 30%; }}
+                .volume-column {{ width: 30%; }}
             </style>
             <table>
                 <tr><th colspan="2">STL情報</th></tr>
@@ -2281,10 +2303,10 @@ class DotPlateApp(QMainWindow):
                 info_html += """
                 <table>
                     <tr>
-                        <th>色</th>
-                        <th>RGB</th>
-                        <th>ドット数</th>
-                        <th>推定体積 (mm³)</th>
+                        <th class="color-column">色</th>
+                        <th class="rgb-column">RGB</th>
+                        <th class="count-column">ドット数</th>
+                        <th class="volume-column">推定体積 (mm³)</th>
                     </tr>
                 """
                 
@@ -2296,10 +2318,10 @@ class DotPlateApp(QMainWindow):
                     
                     info_html += f"""
                     <tr>
-                        <td><div class="color-cell" style="background-color: {hex_color};"></div></td>
-                        <td>({r}, {g}, {b})</td>
-                        <td>{count}</td>
-                        <td>{volume:.2f}</td>
+                        <td class="color-column"><div class="color-cell" style="background-color: {hex_color};"></div></td>
+                        <td class="rgb-column">({r}, {g}, {b})</td>
+                        <td class="count-column">{count}</td>
+                        <td class="volume-column">{volume:.2f}</td>
                     </tr>
                     """
                 
