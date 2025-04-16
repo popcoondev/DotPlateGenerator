@@ -1285,8 +1285,14 @@ class DotPlateApp(QMainWindow):
         self.zoom_slider.setValue(10)
         self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
         
+        # スクラッチでドット絵をペイントするためのクリアボタン
+        self.clear_preview_btn = QPushButton("クリア")
+        self.clear_preview_btn.setToolTip("減色プレビューをクリアし、新しいドット絵を描きます")
+        self.clear_preview_btn.clicked.connect(self.clear_preview_for_scratch)
+        
         zoom_layout.addWidget(self.zoom_label)
         zoom_layout.addWidget(self.zoom_slider)
+        zoom_layout.addWidget(self.clear_preview_btn)
         preview_layout.addLayout(zoom_layout)
         
         preview_group.setLayout(preview_layout)
@@ -2073,6 +2079,33 @@ class DotPlateApp(QMainWindow):
             if hasattr(self, 'pixels_rounded_np'):
                 self.pixels_rounded_np = None
             self.update_preview()
+    
+    def clear_preview_for_scratch(self):
+        """減色プレビューをクリアし、新しいドット絵を描くための空白キャンバスを作成する"""
+        if not self.image_path or not hasattr(self, 'current_grid_size'):
+            return
+            
+        try:
+            # 現在のグリッドサイズに合わせて全て透明(黒)の配列を作成
+            grid_size = self.current_grid_size
+            blank_pixels = np.zeros((grid_size, grid_size, 3), dtype=np.uint8)
+            
+            # 編集履歴を保存
+            self.save_edit_history()
+            
+            # 空のピクセルデータを設定
+            self.pixels_rounded_np = blank_pixels
+            
+            # プレビューを更新
+            self.update_preview(custom_pixels=blank_pixels)
+            
+            # メッセージを表示
+            print("プレビューをクリアしました。スクラッチからドット絵をペイントできます。")
+            self.input_label.setText("プレビューをクリアしました。スクラッチからドット絵をペイントできます。")
+            
+        except Exception as e:
+            print(f"プレビュークリアエラー: {str(e)}")
+            self.input_label.setText(f"プレビュークリアエラー: {str(e)}")
     
     def update_preview(self, custom_pixels=None):
         """プレビュー画像を更新する（custom_pixelsが指定された場合はそれを使用）"""
