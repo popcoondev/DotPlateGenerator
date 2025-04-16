@@ -1079,46 +1079,57 @@ class DotPlateApp(QMainWindow):
         stl_preview_group = QGroupBox("STLプレビュー")
         stl_preview_layout = QVBoxLayout()
         
-        # 正方形のフレームを作成するためのウィジェット
-        square_frame = QWidget()
-        square_frame.setMinimumSize(300, 300)
-        square_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        
-        # アスペクト比を1:1に保つためのポリシーを設定
-        square_frame_policy = square_frame.sizePolicy()
-        square_frame_policy.setHeightForWidth(True)
-        square_frame.setSizePolicy(square_frame_policy)
-        
-        # sizeHintを上書きするためのサブクラス化
+        # カスタムの正方形ウィジェットを作成
         class SquareWidget(QWidget):
             def __init__(self):
                 super().__init__()
+                self.setMinimumSize(250, 250)
+                
+                # 1:1の比率を維持するためのポリシー
+                self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                size_policy = self.sizePolicy()
+                size_policy.setHeightForWidth(True)
+                self.setSizePolicy(size_policy)
+                
+                # 内部レイアウト
+                self.layout = QVBoxLayout(self)
+                self.layout.setContentsMargins(0, 0, 0, 0)
             
             def heightForWidth(self, width):
-                return width  # 幅と同じ高さを返す（1:1の比率）
+                return width  # 幅と同じ高さを返す（正確な1:1の比率）
             
             def hasHeightForWidth(self):
                 return True
+            
+            # サイズヒントも1:1で提供
+            def minimumSizeHint(self):
+                size = QSize(250, 250)
+                return size
+            
+            def sizeHint(self):
+                size = super().sizeHint()
+                return QSize(size.width(), size.width())  # 幅と同じ高さ
         
         # 正方形ウィジェットを作成
         square_widget = SquareWidget()
-        square_layout = QVBoxLayout(square_widget)
-        square_layout.setContentsMargins(0, 0, 0, 0)
         
         # STLプレビューラベル
         self.stl_preview_label = QLabel("STLプレビューが表示されます")
         self.stl_preview_label.setAlignment(Qt.AlignCenter)
-        self.stl_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.stl_preview_label.setMinimumSize(200, 200)
         
-        square_layout.addWidget(self.stl_preview_label)
-        stl_preview_layout.addWidget(square_widget)
+        # 正方形ウィジェットにラベルを追加
+        square_widget.layout.addWidget(self.stl_preview_label)
+        
+        # 正方形ウィジェットをレイアウトに追加（中央揃え）
+        stl_preview_layout.addWidget(square_widget, 0, Qt.AlignCenter)
         stl_preview_group.setLayout(stl_preview_layout)
         column3_layout.addWidget(stl_preview_group)
         
-        # 3つのカラムをメインレイアウトに追加
-        main_layout.addWidget(column1_panel, 1)  # カラム1の幅を1
-        main_layout.addWidget(column2_panel, 1)  # カラム2の幅を1
-        main_layout.addWidget(column3_panel, 1)  # カラム3の幅を1:1
+        # 3つのカラムをメインレイアウトに追加（1と2を優先）
+        main_layout.addWidget(column1_panel, 4)  # カラム1の幅を4
+        main_layout.addWidget(column2_panel, 4)  # カラム2の幅を4
+        main_layout.addWidget(column3_panel, 2)  # カラム3の幅を2（やや狭め）
         
         self.image_path = None
         self.zoom_factor = 10
@@ -2200,11 +2211,17 @@ class DotPlateApp(QMainWindow):
             
             # 画像を読み込んでプレビューに表示
             pixmap = QPixmap(img_path)
-            self.stl_preview_label.setPixmap(pixmap)
-            self.stl_preview_label.setScaledContents(True)
             
-            # プレビューを正方形にするために、高さ=幅を設定
-            self.stl_preview_label.setFixedHeight(self.stl_preview_label.width())
+            # 画像を正方形にトリミング（1:1の比率を確保）
+            size = min(pixmap.width(), pixmap.height())
+            square_pixmap = pixmap.copy(
+                (pixmap.width() - size) // 2,
+                (pixmap.height() - size) // 2,
+                size, size
+            )
+            
+            self.stl_preview_label.setPixmap(square_pixmap)
+            self.stl_preview_label.setScaledContents(True)
             
             # 一時ファイルを削除
             os.remove(temp_stl_path)
@@ -2288,12 +2305,17 @@ class DotPlateApp(QMainWindow):
         qimg.loadFromData(buf.getvalue())
         pixmap = QPixmap.fromImage(qimg)
         
-        # プレビューラベルに表示
-        self.stl_preview_label.setPixmap(pixmap)
-        self.stl_preview_label.setScaledContents(True)
+        # 画像を正方形にトリミング（1:1の比率を確保）
+        size = min(pixmap.width(), pixmap.height())
+        square_pixmap = pixmap.copy(
+            (pixmap.width() - size) // 2,
+            (pixmap.height() - size) // 2,
+            size, size
+        )
         
-        # プレビューを正方形にするために、高さ=幅を設定
-        self.stl_preview_label.setFixedHeight(self.stl_preview_label.width())
+        # プレビューラベルに表示
+        self.stl_preview_label.setPixmap(square_pixmap)
+        self.stl_preview_label.setScaledContents(True)
     
     def save_front_view_image(self, mesh):
         """別スレッドで正面からの画像と上面からの画像を保存"""
