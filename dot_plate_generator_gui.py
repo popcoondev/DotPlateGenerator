@@ -3,6 +3,9 @@
 
 import sys
 import os
+import json
+import pickle
+import base64
 import numpy as np
 from PIL import Image
 from collections import Counter
@@ -13,7 +16,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout, QDoubleSpinBox,
     QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
-    QColorDialog, QCheckBox, QComboBox, QMenu, QAction
+    QColorDialog, QCheckBox, QComboBox, QMenu, QAction, QMenuBar
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QPixmap, QImage, QColor
@@ -642,6 +645,256 @@ class ParameterHelpDialog(QDialog):
 # GUI クラス
 # -------------------------------
 class DotPlateApp(QMainWindow):
+    # メニューバー作成とプロジェクトファイル操作
+    def create_menu_bar(self):
+        """アプリケーションのメニューバーを作成する"""
+        menubar = self.menuBar()
+        
+        # ファイルメニュー
+        file_menu = menubar.addMenu('ファイル')
+        
+        # 画像を開く
+        open_img_action = QAction('画像を開く', self)
+        open_img_action.triggered.connect(self.select_image)
+        file_menu.addAction(open_img_action)
+        
+        # プロジェクトを開く
+        open_project_action = QAction('プロジェクトを開く', self)
+        open_project_action.triggered.connect(self.load_project)
+        file_menu.addAction(open_project_action)
+        
+        file_menu.addSeparator()
+        
+        # プロジェクトを保存
+        save_project_action = QAction('プロジェクトを保存', self)
+        save_project_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_project_action)
+        
+        # STLエクスポート
+        export_stl_action = QAction('STLファイルを出力', self)
+        export_stl_action.triggered.connect(self.export_stl)
+        file_menu.addAction(export_stl_action)
+        
+        file_menu.addSeparator()
+        
+        # 終了
+        exit_action = QAction('終了', self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # 編集メニュー
+        edit_menu = menubar.addMenu('編集')
+        
+        # 元に戻す
+        undo_action = QAction('元に戻す', self)
+        undo_action.triggered.connect(self.undo_edit)
+        edit_menu.addAction(undo_action)
+        
+        # やり直し
+        redo_action = QAction('やり直し', self)
+        redo_action.triggered.connect(self.redo_edit)
+        edit_menu.addAction(redo_action)
+        
+        edit_menu.addSeparator()
+        
+        # プレビューをクリア
+        clear_action = QAction('プレビューをクリア', self)
+        clear_action.triggered.connect(self.clear_preview_for_scratch)
+        edit_menu.addAction(clear_action)
+    
+    def save_project(self):
+        """プロジェクトをファイルに保存する"""
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            self.statusBar().showMessage("保存するプロジェクトデータがありません")
+            return
+            
+        # 保存先ファイル名を取得
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "プロジェクトを保存", "", "ドットプレートプロジェクト (*.dpp)")
+        
+        if not file_path:
+            return
+            
+        # ファイル拡張子を確認して追加
+        if not file_path.endswith('.dpp'):
+            file_path += '.dpp'
+            
+        try:
+            # 保存するデータを収集
+            project_data = {
+                'version': '1.0',
+                'image_path': self.image_path,
+                'current_grid_size': self.current_grid_size,
+                'current_color_algo': self.current_color_algo,
+                'zoom_factor': self.zoom_factor,
+            }
+            
+            # パラメータを保存
+            if hasattr(self, 'controls'):
+                parameter_values = {}
+                for key, spin in self.controls.items():
+                    try:
+                        # 数値型に変換して格納
+                        value = spin.value()
+                        if isinstance(value, (int, float)):
+                            parameter_values[key] = value
+                        else:
+                            # QVariantなど特殊な型の場合は文字列に変換
+                            parameter_values[key] = float(value)
+                    except Exception as e:
+                        print(f"パラメータ '{key}' の保存エラー: {str(e)}")
+                project_data['parameters'] = parameter_values
+            
+            # ピクセルデータをBase64エンコードして保存
+            if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+                pixel_data_binary = pickle.dumps(self.pixels_rounded_np)
+                pixel_data_b64 = base64.b64encode(pixel_data_binary).decode('utf-8')
+                project_data['pixels_data'] = pixel_data_b64
+            
+            # 壁の色を保存（QColorをRGB値のリストに変換）
+            if hasattr(self, 'wall_color'):
+                if isinstance(self.wall_color, QColor):
+                    project_data['wall_color'] = [self.wall_color.red(), 
+                                                 self.wall_color.green(), 
+                                                 self.wall_color.blue()]
+                else:
+                    # 既にタプルやリストの場合
+                    project_data['wall_color'] = list(self.wall_color)
+            
+            # 編集履歴（最新の状態のみ）を保存
+            if hasattr(self, 'edit_history') and len(self.edit_history) > 0:
+                latest_history_binary = pickle.dumps(self.edit_history[-1])
+                latest_history_b64 = base64.b64encode(latest_history_binary).decode('utf-8')
+                project_data['latest_history'] = latest_history_b64
+            
+            # 同色マージオプションを保存
+            if hasattr(self, 'merge_same_color_checkbox'):
+                project_data['merge_same_color'] = self.merge_same_color_checkbox.isChecked()
+            
+            # ファイルに書き込み
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(project_data, f, ensure_ascii=False, indent=2)
+                
+            self.statusBar().showMessage(f"プロジェクトを保存しました: {file_path}")
+            
+        except Exception as e:
+            self.statusBar().showMessage(f"プロジェクト保存エラー: {str(e)}")
+            print(f"プロジェクト保存エラー: {str(e)}")
+    
+    def load_project(self):
+        """プロジェクトファイルを読み込む"""
+        # ファイルを選択
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "プロジェクトを開く", "", "ドットプレートプロジェクト (*.dpp)")
+        
+        if not file_path:
+            return
+            
+        try:
+            # ファイルからプロジェクトデータを読み込み
+            with open(file_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+                try:
+                    project_data = json.loads(file_content)
+                except json.JSONDecodeError as je:
+                    print(f"JSONデコードエラー: {je}")
+                    print(f"問題のある行付近: {file_content[max(0, je.pos-50):min(len(file_content), je.pos+50)]}")
+                    raise
+            
+            # バージョンチェック
+            version = project_data.get('version', '1.0')
+            
+            # 画像パスを設定
+            image_path = project_data.get('image_path')
+            if image_path and os.path.exists(image_path):
+                self.image_path = image_path
+                self.input_label.setText(image_path)
+            else:
+                self.statusBar().showMessage("元の画像ファイルが見つかりません。プロジェクトデータのみ復元します。")
+            
+            # 各種パラメータを復元
+            if 'parameters' in project_data and hasattr(self, 'controls'):
+                for key, value in project_data['parameters'].items():
+                    if key in self.controls:
+                        try:
+                            # 確実に数値型に変換
+                            numeric_value = float(value)
+                            if key in ["Grid Size", "Top Colors", "Color Step"]:
+                                # 整数値が必要なパラメータ
+                                numeric_value = int(numeric_value)
+                            self.controls[key].setValue(numeric_value)
+                        except (ValueError, TypeError) as e:
+                            print(f"パラメータ '{key}' の値 '{value}' を変換できませんでした: {str(e)}")
+            
+            # グリッドサイズを復元
+            if 'current_grid_size' in project_data:
+                self.current_grid_size = project_data['current_grid_size']
+            
+            # 色アルゴリズムを復元
+            if 'current_color_algo' in project_data:
+                self.current_color_algo = project_data['current_color_algo']
+                # コンボボックスも更新
+                if hasattr(self, 'color_algo_combo'):
+                    algo_index = 0  # デフォルトはsimple
+                    if self.current_color_algo == "median_cut":
+                        algo_index = 1
+                    elif self.current_color_algo == "kmeans":
+                        algo_index = 2
+                    elif self.current_color_algo == "octree":
+                        algo_index = 3
+                    self.color_algo_combo.setCurrentIndex(algo_index)
+            
+            # ズーム係数を復元
+            if 'zoom_factor' in project_data:
+                self.zoom_factor = project_data['zoom_factor']
+                if hasattr(self, 'zoom_slider'):
+                    self.zoom_slider.setValue(self.zoom_factor)
+            
+            # ピクセルデータを復元
+            if 'pixels_data' in project_data:
+                pixels_b64 = project_data['pixels_data']
+                pixels_binary = base64.b64decode(pixels_b64)
+                self.pixels_rounded_np = pickle.loads(pixels_binary)
+            
+            # 壁の色を復元
+            if 'wall_color' in project_data:
+                wall_color_data = project_data['wall_color']
+                # リストかタプルの場合
+                if isinstance(wall_color_data, (list, tuple)) and len(wall_color_data) >= 3:
+                    r, g, b = wall_color_data[0], wall_color_data[1], wall_color_data[2]
+                    self.wall_color = (r, g, b)
+                    if hasattr(self, 'wall_color_btn'):
+                        self.set_button_color(self.wall_color_btn, QColor(r, g, b))
+            
+            # 同色マージオプションを復元
+            if 'merge_same_color' in project_data and hasattr(self, 'merge_same_color_checkbox'):
+                self.merge_same_color_checkbox.setChecked(project_data['merge_same_color'])
+            
+            # 編集履歴を初期化
+            self.edit_history = []
+            self.history_position = 0
+            
+            # 最新の履歴状態を復元
+            if 'latest_history' in project_data:
+                latest_history_b64 = project_data['latest_history']
+                latest_history_binary = base64.b64decode(latest_history_b64)
+                latest_history = pickle.loads(latest_history_binary)
+                self.edit_history.append(latest_history)
+                self.history_position = 0
+            elif hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+                # 履歴がない場合は現在の状態を追加
+                self.edit_history.append(self.pixels_rounded_np.copy())
+                self.history_position = 0
+            
+            # プレビューを更新
+            self.update_preview(custom_pixels=self.pixels_rounded_np)
+            
+            self.statusBar().showMessage(f"プロジェクトを読み込みました: {file_path}")
+            
+        except Exception as e:
+            self.statusBar().showMessage(f"プロジェクト読み込みエラー: {str(e)}")
+            print(f"プロジェクト読み込みエラー: {str(e)}")
+    
     # 色ハイライトと置換のための新しいメソッド
     def on_color_cell_clicked(self, url):
         """色セルがクリックされたときのハンドラー"""
@@ -856,6 +1109,9 @@ class DotPlateApp(QMainWindow):
         
         # ステータスバーを初期化
         self.statusBar().showMessage("準備完了")
+        
+        # メニューバーを作成
+        self.create_menu_bar()
         
         # メインウィジェットとレイアウト（3カラム構成）
         main_widget = QWidget()
