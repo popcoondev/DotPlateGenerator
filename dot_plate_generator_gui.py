@@ -1075,16 +1075,43 @@ class DotPlateApp(QMainWindow):
         column3_panel = QWidget()
         column3_layout = QVBoxLayout(column3_panel)
         
-        # STLプレビュー領域
+        # STLプレビュー領域（1:1の正方形比率で表示）
         stl_preview_group = QGroupBox("STLプレビュー")
         stl_preview_layout = QVBoxLayout()
         
+        # 正方形のフレームを作成するためのウィジェット
+        square_frame = QWidget()
+        square_frame.setMinimumSize(300, 300)
+        square_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # アスペクト比を1:1に保つためのポリシーを設定
+        square_frame_policy = square_frame.sizePolicy()
+        square_frame_policy.setHeightForWidth(True)
+        square_frame.setSizePolicy(square_frame_policy)
+        
+        # sizeHintを上書きするためのサブクラス化
+        class SquareWidget(QWidget):
+            def __init__(self):
+                super().__init__()
+            
+            def heightForWidth(self, width):
+                return width  # 幅と同じ高さを返す（1:1の比率）
+            
+            def hasHeightForWidth(self):
+                return True
+        
+        # 正方形ウィジェットを作成
+        square_widget = SquareWidget()
+        square_layout = QVBoxLayout(square_widget)
+        square_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # STLプレビューラベル
         self.stl_preview_label = QLabel("STLプレビューが表示されます")
         self.stl_preview_label.setAlignment(Qt.AlignCenter)
         self.stl_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.stl_preview_label.setMinimumSize(300, 300)
         
-        stl_preview_layout.addWidget(self.stl_preview_label)
+        square_layout.addWidget(self.stl_preview_label)
+        stl_preview_layout.addWidget(square_widget)
         stl_preview_group.setLayout(stl_preview_layout)
         column3_layout.addWidget(stl_preview_group)
         
@@ -2160,7 +2187,7 @@ class DotPlateApp(QMainWindow):
             # 完全に真上からの視点に設定
             cam.SetPosition(center[0], center[1], z_pos)
             cam.SetFocalPoint(center[0], center[1], center[2])
-            cam.SetViewUp(-1, 0, 0)  # X軸負方向が上になるよう設定（反時計回りに90度回転）
+            cam.SetViewUp(1, 0, 0)  # X軸正方向が上になるよう設定（XY平面で180度回転）
             
             # 背景色を白にし、軸を非表示に
             plt.background('white')
@@ -2175,6 +2202,9 @@ class DotPlateApp(QMainWindow):
             pixmap = QPixmap(img_path)
             self.stl_preview_label.setPixmap(pixmap)
             self.stl_preview_label.setScaledContents(True)
+            
+            # プレビューを正方形にするために、高さ=幅を設定
+            self.stl_preview_label.setFixedHeight(self.stl_preview_label.width())
             
             # 一時ファイルを削除
             os.remove(temp_stl_path)
@@ -2204,8 +2234,8 @@ class DotPlateApp(QMainWindow):
         min_bounds = mesh.bounds[0]
         max_bounds = mesh.bounds[1]
         
-        # Z軸正方向から真上に見る角度に設定（完全に90度）
-        ax.view_init(elev=90, azim=90)  # 真上から見て反時計回りに90度回転（azimuthを90度に）
+        # Z軸正方向から真上に見る角度に設定
+        ax.view_init(elev=90, azim=270)  # 真上から見て、XY平面で180度回転した状態（azimuthを270度に）
         
         # メッシュを表示 (trimesh.Trimesh.show()はmatplotlibのax引数を受け付けない問題の修正)
         # trimeshのvisuals.plotterでマニュアルで描画
@@ -2261,6 +2291,9 @@ class DotPlateApp(QMainWindow):
         # プレビューラベルに表示
         self.stl_preview_label.setPixmap(pixmap)
         self.stl_preview_label.setScaledContents(True)
+        
+        # プレビューを正方形にするために、高さ=幅を設定
+        self.stl_preview_label.setFixedHeight(self.stl_preview_label.width())
     
     def save_front_view_image(self, mesh):
         """別スレッドで正面からの画像と上面からの画像を保存"""
