@@ -724,7 +724,6 @@ class DotPlateApp(QMainWindow):
         # 同じ色のドット間の内壁を省略するオプション
         self.merge_same_color_checkbox = QCheckBox("同じ色のドット間の内壁を省略")
         self.merge_same_color_checkbox.setChecked(False)  # デフォルトはオフ
-        self.merge_same_color_checkbox.setToolTip("このオプションを有効にすると、同じ色のドット同士の間の内壁が作られなくなります。")
         
         # ペイントツール用の変数
         self.current_paint_color = QColor(255, 0, 0)  # デフォルト色：赤
@@ -1087,6 +1086,73 @@ class DotPlateApp(QMainWindow):
         self.edit_history = []  # ピクセルデータの履歴
         self.history_position = -1  # 現在の履歴位置
         self.pixels_rounded_np = None  # 初期化
+            ("Wall Thickness", 0.2, 0.0, 5.0),
+            ("Wall Height", 0.4, 0.0, 5.0),
+            ("Base Height", 2.0, 0.0, 5.0),
+            ("Out Thickness", 0.0, 0.0, 5.0),
+            ("Color Step", 8, 1, 64),
+            ("Top Colors", 36, 1, 64)
+        ]
+        
+        for i, (label, default, minv, maxv) in enumerate(parameters):
+            # パラメータラベルと説明ボタン
+            param_label_layout = QHBoxLayout()
+            label_widget = QLabel(label)
+            
+            help_button = QToolButton()
+            help_button.setText("?")
+            help_button.setToolTip(f"{label}についての説明を表示")
+            help_button.clicked.connect(lambda checked, label=label: self.show_parameter_help(label))
+            
+            param_label_layout.addWidget(label_widget)
+            param_label_layout.addWidget(help_button)
+            
+            # スピンボックス
+            is_int = isinstance(default, int)
+            spin = QSpinBox() if is_int else QDoubleSpinBox()
+            spin.setMinimum(minv)
+            spin.setMaximum(maxv)
+            spin.setValue(default)
+            
+            if not is_int:
+                spin.setSingleStep(0.1)
+                spin.setDecimals(2)
+            
+            # スライダー
+            slider = QSlider(Qt.Horizontal)
+            # 整数の場合はそのまま、小数の場合は100倍して扱う
+            slider_factor = 1 if is_int else 100
+            slider.setMinimum(int(minv * slider_factor))
+            slider.setMaximum(int(maxv * slider_factor))
+            slider.setValue(int(default * slider_factor))
+            
+            # 値の連動
+            def make_spin_changed(label, slider, is_int, slider_factor):
+                def spin_changed():
+                    value = self.controls[label].value()
+                    self.sliders[label].setValue(int(value * slider_factor))
+                    self.update_preview()
+                return spin_changed
+            
+            def make_slider_changed(label, is_int, slider_factor):
+                def slider_changed(value):
+                    self.controls[label].setValue(value / slider_factor)
+                    self.update_preview()
+                return slider_changed
+            
+            spin.valueChanged.connect(make_spin_changed(label, slider, is_int, slider_factor))
+            slider.valueChanged.connect(make_slider_changed(label, is_int, slider_factor))
+            
+            # グリッドに追加
+            self.param_grid.addLayout(param_label_layout, i, 0)
+            self.param_grid.addWidget(spin, i, 1)
+            self.param_grid.addWidget(slider, i, 2)
+            
+            self.controls[label] = spin
+            self.sliders[label] = slider
+        
+        param_layout.addLayout(self.param_grid)
+        param_group.setLayout(param_layout)
         
         # 各カラムの設定完了
         
