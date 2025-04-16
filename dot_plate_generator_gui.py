@@ -682,9 +682,12 @@ class DotPlateApp(QMainWindow):
         original_group.setLayout(original_layout)
         column1_layout.addWidget(original_group)
         
-        # パラメータ設定グループ
+        # パラメータ設定グループ（スクロール対応）
         param_group = QGroupBox("パラメータ設定")
-        param_layout = QVBoxLayout()
+        param_scroll = QScrollArea()
+        param_scroll.setWidgetResizable(True)
+        param_scroll_content = QWidget()
+        param_layout = QVBoxLayout(param_scroll_content)
         
         # 減色アルゴリズム選択
         color_algo_layout = QHBoxLayout()
@@ -910,7 +913,15 @@ class DotPlateApp(QMainWindow):
         param_layout.addLayout(wall_color_layout)
         param_layout.addWidget(self.merge_same_color_checkbox)
         param_layout.addLayout(self.param_grid)
-        param_group.setLayout(param_layout)
+        param_layout.addStretch()  # 下部に余白を追加
+        
+        # スクロールエリアの設定
+        param_scroll.setWidget(param_scroll_content)
+        param_scroll.setMinimumHeight(250)  # 最小の高さを設定
+        
+        param_group_layout = QVBoxLayout()
+        param_group_layout.addWidget(param_scroll)
+        param_group.setLayout(param_group_layout)
         column1_layout.addWidget(param_group)
         
         # カラム2：ペイント操作、プレビュー、ズームバー
@@ -925,22 +936,25 @@ class DotPlateApp(QMainWindow):
         edit_toolbar = QHBoxLayout()
         
         # ペイントモード切り替えボタン
-        paint_mode_btn = QPushButton("ペンモード")
+        paint_mode_btn = QPushButton("ペン")
         paint_mode_btn.setToolTip("ペンでドットを描く")
         paint_mode_btn.setCheckable(True)
         paint_mode_btn.setChecked(True)
+        paint_mode_btn.setMinimumWidth(60)  # 最小幅を設定
         paint_mode_btn.clicked.connect(lambda checked: self.set_paint_mode(True))
         
         # バケツ（塗りつぶし）モード切り替えボタン
-        bucket_mode_btn = QPushButton("塗りつぶし")
+        bucket_mode_btn = QPushButton("塗潰")
         bucket_mode_btn.setToolTip("同じ色のドットを塗りつぶす")
         bucket_mode_btn.setCheckable(True)
+        bucket_mode_btn.setMinimumWidth(60)  # 最小幅を設定
         bucket_mode_btn.clicked.connect(lambda checked: self.set_bucket_mode(checked))
         
         # 選択モード切り替えボタン
-        select_mode_btn = QPushButton("選択モード")
+        select_mode_btn = QPushButton("選択")
         select_mode_btn.setToolTip("クリックで色を選択")
         select_mode_btn.setCheckable(True)
+        select_mode_btn.setMinimumWidth(60)  # 最小幅を設定
         select_mode_btn.clicked.connect(lambda checked: self.set_paint_mode(False))
         
         # モードボタンをグループ化
@@ -962,16 +976,19 @@ class DotPlateApp(QMainWindow):
         self.transparent_btn = QPushButton("透明")
         self.transparent_btn.setToolTip("透明色（黒=0,0,0）で描画")
         self.transparent_btn.setCheckable(True)
+        self.transparent_btn.setMinimumWidth(60)  # 最小幅を設定
         self.transparent_btn.toggled.connect(self.toggle_transparent_paint_color)
         
         # 元に戻す（Undo）ボタン
-        undo_btn = QPushButton("元に戻す")
+        undo_btn = QPushButton("←")
         undo_btn.setToolTip("直前の編集を元に戻す")
+        undo_btn.setMinimumWidth(40)  # 最小幅を設定
         undo_btn.clicked.connect(self.undo_edit)
         
         # やり直し（Redo）ボタン
-        redo_btn = QPushButton("やり直し")
+        redo_btn = QPushButton("→")
         redo_btn.setToolTip("元に戻した編集をやり直す")
+        redo_btn.setMinimumWidth(40)  # 最小幅を設定
         redo_btn.clicked.connect(self.redo_edit)
         
         # ツールバーにボタンを追加
@@ -1074,7 +1091,7 @@ class DotPlateApp(QMainWindow):
         # 3つのカラムをメインレイアウトに追加
         main_layout.addWidget(column1_panel, 1)  # カラム1の幅を1
         main_layout.addWidget(column2_panel, 1)  # カラム2の幅を1
-        main_layout.addWidget(column3_panel, 1)  # カラム3の幅を1
+        main_layout.addWidget(column3_panel, 1)  # カラム3の幅を1:1
         
         self.image_path = None
         self.zoom_factor = 10
