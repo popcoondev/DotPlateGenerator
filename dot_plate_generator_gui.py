@@ -2231,13 +2231,24 @@ class DotPlateApp(QMainWindow):
                 
                 # 体積計算（ドットのサイズと各色のドット数から概算）
                 dot_size = float(params["Dot Size"])
-                dot_height = float(params["Wall Height"]) + float(params["Base Height"])
+                base_height = float(params["Base Height"])
+                wall_height = float(params["Wall Height"])
+                dot_height = wall_height + base_height  # mm
                 dot_volume = dot_size * dot_size * dot_height  # mm³
+                
+                # 総体積
                 total_volume = total_dots * dot_volume
+                
+                # 色ごとの体積を計算
+                color_volumes = {}
+                for color, count in color_counts.items():
+                    color_volumes[color] = count * dot_volume
             else:
                 # ピクセルデータがない場合は推定
                 total_dots = "不明"
                 unique_colors = "不明"
+                color_counts = {}
+                color_volumes = {}
                 
             # 情報テキストの組み立て
             info_html = f"""
@@ -2247,6 +2258,7 @@ class DotPlateApp(QMainWindow):
                 table {{ border-collapse: collapse; width: 100%; }}
                 th, td {{ padding: 4px; text-align: left; }}
                 th {{ background-color: #f2f2f2; }}
+                .color-cell {{ width: 15px; height: 15px; display: inline-block; border: 1px solid #ccc; }}
             </style>
             <table>
                 <tr><th colspan="2">STL情報</th></tr>
@@ -2255,8 +2267,47 @@ class DotPlateApp(QMainWindow):
                 <tr><td>最大高さ (Z):</td><td>{height:.2f} mm</td></tr>
                 <tr><td>ドット数:</td><td>{total_dots}</td></tr>
                 <tr><td>使用色数:</td><td>{unique_colors}</td></tr>
-                <tr><td>推定体積:</td><td>{total_volume:.2f} mm³</td></tr>
+                <tr><td>総推定体積:</td><td>{total_volume:.2f} mm³</td></tr>
             </table>
+            <br/>
+            """
+            
+            # 色ごとの詳細テーブルを追加
+            if color_counts:
+                # 色を使用頻度順にソート
+                sorted_colors = sorted(color_counts.items(), key=lambda x: x[1], reverse=True)
+                
+                # 色ごとの詳細テーブル
+                info_html += """
+                <table>
+                    <tr>
+                        <th>色</th>
+                        <th>RGB</th>
+                        <th>ドット数</th>
+                        <th>推定体積 (mm³)</th>
+                    </tr>
+                """
+                
+                # 各色の行を追加
+                for color, count in sorted_colors:
+                    r, g, b = color
+                    volume = color_volumes[color]
+                    hex_color = f"#{r:02x}{g:02x}{b:02x}"
+                    
+                    info_html += f"""
+                    <tr>
+                        <td><div class="color-cell" style="background-color: {hex_color};"></div></td>
+                        <td>({r}, {g}, {b})</td>
+                        <td>{count}</td>
+                        <td>{volume:.2f}</td>
+                    </tr>
+                    """
+                
+                info_html += """
+                </table>
+                """
+            
+            info_html += """
             </body>
             </html>
             """
