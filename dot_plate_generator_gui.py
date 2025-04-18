@@ -354,6 +354,10 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
             palette = get_octree_palette(pixels, top_color_limit)
             pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
             
+        elif color_algo == "none":
+            # 減色なし - 元の色をそのまま使用
+            pixels_rounded = pixels.tolist()  # NumPy配列をリストに変換
+            
         else:
             # デフォルトは単純アルゴリズム
             pixels_normalized = normalize_colors(pixels, color_step)
@@ -1276,7 +1280,8 @@ class DotPlateApp(QMainWindow):
             "メディアンカット法 (Median Cut)", 
             "K-means法 (K-means)", 
             "オクトツリー法 (Octree)",
-            "トゥーンアニメ風 (Toon)"
+            "トゥーンアニメ風 (Toon)",
+            "減色なし (No Quantization)"
         ])
         self.color_algo_combo.setToolTip(
             "減色アルゴリズムの選択:\n"
@@ -1284,7 +1289,8 @@ class DotPlateApp(QMainWindow):
             "・メディアンカット法: 色空間を分割し、各領域の代表色を使用\n"
             "・K-means法: 機械学習ベースの色のクラスタリング\n"
             "・オクトツリー法: 色空間の階層的分割による高品質な減色\n"
-            "・トゥーンアニメ風: 鮮やかな色とはっきりした色の差を持つアニメ風の配色"
+            "・トゥーンアニメ風: 鮮やかな色とはっきりした色の差を持つアニメ風の配色\n"
+            "・減色なし: 元画像の色をそのまま使用（高品質、多色数）"
         )
         self.color_algo_combo.currentIndexChanged.connect(self.on_color_algo_changed)
         
@@ -2461,7 +2467,8 @@ class DotPlateApp(QMainWindow):
             1: "median_cut", # メディアンカット法
             2: "kmeans",     # K-means法
             3: "octree",     # オクトツリー法
-            4: "toon"        # トゥーンアニメ風
+            4: "toon",       # トゥーンアニメ風
+            5: "none"        # 減色なし
         }
         
         self.current_color_algo = algo_map.get(index, "simple")
@@ -2472,6 +2479,7 @@ class DotPlateApp(QMainWindow):
             "median_cut": "メディアンカット法（色空間分割による減色）を使用します",
             "kmeans": "K-means法（機械学習ベースのクラスタリング）を使用します",
             "toon": "トゥーンアニメ風の鮮やかな色使いで減色します",
+            "none": "減色せず元画像の色をそのまま使用します",
             "octree": "オクトツリー法（階層的色空間分割）を使用します"
         }
         
@@ -2683,6 +2691,10 @@ class DotPlateApp(QMainWindow):
                         # オクトツリー法
                         palette = get_octree_palette(pixels, int(params["Top Colors"]))
                         pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
+                        
+                    elif self.current_color_algo == "none":
+                        # 減色なし - 元の色をそのまま使用
+                        pixels_rounded = pixels.tolist()  # NumPy配列をリストに変換
                         
                     elif self.current_color_algo == "toon":
                         # トゥーンアニメ風
