@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Dot Plate Generator - レポート</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        h1, h2 { color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .images { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; }
+        .image-container { flex: 1; min-width: 300px; }
+        .image-container img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+        .info-section { margin-bottom: 30px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .color-cell { width: 20px; height: 20px; display: inline-block; border: 1px solid #ccc; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Dot Plate Generator - プロジェクトレポート</h1>
+        
+        <div class="info-section">
+            <h2>ファイル情報</h2>
+            <table>
+                <tr><th>項目</th><th>値</th></tr>
+                <tr><td>入力ファイル</td><td>/Users/mn/Desktop/スクリーンショット 2025-04-16 21.13.28.png</td></tr>
+                <tr><td>STL出力ファイル</td><td>/Users/mn/development/DotPlateGenerator/c2.stl</td></tr>
+                <tr><td>レポート作成日時</td><td>2025-04-18 22:24:24</td></tr>
+            </table>
+        </div>
+        
+        <div class="images">
+            <div class="image-container">
+                <h3>オリジナル画像</h3>
+                <img src="c2_original_1744982664.png" alt="オリジナル画像">
+            </div>
+            <div class="image-container">
+                <h3>減色プレビュー</h3>
+                <img src="c2_preview_1744982664.png" alt="減色プレビュー">
+            </div>
+            <div class="image-container">
+                <h3>STLプレビュー</h3>
+                <img src="c2_stl_preview_1744982664.png" alt="STLプレビュー">
+            </div>
+        </div>
+        
+        <div class="info-section">
+            <h2>パラメータ設定</h2>
+            <table>
+                <tr><th>パラメータ</th><th>値</th></tr>
+                <tr><td>グリッドサイズ</td><td>26</td></tr>
+                <tr><td>ドットサイズ</td><td>2.0 mm</td></tr>
+                <tr><td>壁の厚さ</td><td>0.2 mm</td></tr>
+                <tr><td>壁の高さ</td><td>0.2 mm</td></tr>
+                <tr><td>ベースの高さ</td><td>2.0 mm</td></tr>
+                <tr><td>外壁の厚さ</td><td>0.1 mm</td></tr>
+                <tr><td>色ステップ</td><td>8</td></tr>
+                <tr><td>上位色数</td><td>36</td></tr>
+                <tr><td>減色アルゴリズム</td><td>減色なし</td></tr>
+                <tr><td>壁の色</td><td style="display: flex; align-items: center;">
+                    <div class="color-cell" style="background-color: rgb(255, 255, 255);"></div>
+                    &nbsp;RGB(255, 255, 255)
+                </td></tr>
+                <tr><td>同色間内壁省略</td><td>あり</td></tr>
+            </table>
+        </div>
+        
+        <div class="info-section">
+            <h2>STL情報</h2>
+            <table>
+                <tr><th>項目</th><th>値</th></tr>
+                <tr><td>最大幅 (X)</td><td>42.20 mm</td></tr>
+                <tr><td>最大奥行き (Y)</td><td>50.20 mm</td></tr>
+                <tr><td>最大高さ (Z)</td><td>2.20 mm</td></tr>
+                <tr><td>ドット数</td><td>355</td></tr>
+                <tr><td>使用色数</td><td>10</td></tr>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

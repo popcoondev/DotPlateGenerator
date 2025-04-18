@@ -443,6 +443,249 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
 # -------------------------------
 # モデル生成関数
 # -------------------------------
+def generate_html_report(self, stl_path, mesh):
+    """STL情報とアプリの情報をHTMLレポートとして保存する"""
+    try:
+        # HTMLファイルパスを取得（STLと同じ名前＋.html）
+        html_path = f"{os.path.splitext(stl_path)[0]}.html"
+        
+        # パラメータ値を取得
+        params = {key: spin.value() for key, spin in self.controls.items()}
+        
+        # オリジナル画像と減色プレビュー画像のパス
+        timestamp = int(time.time())
+        original_img_path = f"{os.path.splitext(stl_path)[0]}_original_{timestamp}.png"
+        preview_img_path = f"{os.path.splitext(stl_path)[0]}_preview_{timestamp}.png"
+        stl_preview_img_path = f"{os.path.splitext(stl_path)[0]}_stl_preview_{timestamp}.png"
+        
+        # 画像を保存
+        if self.image_path:
+            orig_img = Image.open(self.image_path)
+            orig_img.save(original_img_path)
+        
+        # プレビュー画像を保存
+        if self.preview_pixmap:
+            self.preview_pixmap.save(preview_img_path)
+        
+        # STLプレビュー画像を生成・保存
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # トリメッシュのメッシュをMatplotlibで描画
+        vertices = mesh.vertices
+        faces = mesh.faces
+        
+        # メッシュをプロット
+        ax.plot_trisurf(vertices[:, 0], vertices[:, 1], vertices[:, 2], 
+                        triangles=faces, color='lightgray', alpha=0.8, shade=True)
+        
+        # 画軸の設定
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        
+        # カメラアングルを等角投影に近づける
+        ax.view_init(elev=30, azim=45)
+        
+        # 軸を均等にして歪みを防ぐ
+        plt.tight_layout()
+        plt.savefig(stl_preview_img_path)
+        plt.close()
+        
+        # 色の使用率とボリュームを計算
+        color_stats = self.get_color_statistics(mesh)
+        
+        # 色テーブルHTMLを生成
+        color_table_html = self.generate_color_table_html(color_stats)
+        
+        # HTMLレポートを生成
+        html_content = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ドットプレート生成レポート</title>
+    <style>
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        h1, h2, h3 {{ color: #2c3e50; }}
+        .container {{ display: flex; flex-wrap: wrap; gap: 20px; }}
+        .section {{ flex: 1; min-width: 300px; background: #f9f9f9; padding: 20px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
+        th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }}
+        th {{ background-color: #f2f2f2; }}
+        .color-swatch {{ width: 24px; height: 24px; display: inline-block; border: 1px solid #ccc; }}
+        img {{ max-width: 100%; height: auto; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .image-container {{ display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }}
+        .image-box {{ flex: 1; min-width: 300px; }}
+        footer {{ margin-top: 30px; text-align: center; font-size: 0.8em; color: #888; }}
+    </style>
+</head>
+<body>
+    <h1>ドットプレート生成レポート</h1>
+    <div class="container">
+        <div class="section">
+            <h2>プロジェクト情報</h2>
+            <table>
+                <tr><th>項目</th><th>値</th></tr>
+                <tr><td>元画像</td><td>{os.path.basename(self.image_path) if self.image_path else 'なし'}</td></tr>
+                <tr><td>生成日時</td><td>{time.strftime('%Y-%m-%d %H:%M:%S')}</td></tr>
+                <tr><td>グリッドサイズ</td><td>{self.controls['grid_size'].value()} x {self.controls['grid_size'].value()}</td></tr>
+                <tr><td>ドットサイズ</td><td>{self.controls['dot_size'].value()} mm</td></tr>
+                <tr><td>使用色数</td><td>{len(color_stats)}</td></tr>
+                <tr><td>減色アルゴリズム</td><td>{self.color_algo_combo.currentText()}</td></tr>
+                <tr><td>STLファイル名</td><td>{os.path.basename(stl_path)}</td></tr>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>パラメータ設定</h2>
+            <table>
+                <tr><th>パラメータ</th><th>値</th></tr>
+                {''.join([f"<tr><td>{key}</td><td>{value}</td></tr>" for key, value in params.items()])}
+                <tr><td>Wall Color</td><td style="display:flex;align-items:center;"><div class="color-swatch" style="background-color:rgb{tuple(self.wall_color) if isinstance(self.wall_color, tuple) else self.wall_color.getRgb()[:3]};"></div>&nbsp;RGB{tuple(self.wall_color) if isinstance(self.wall_color, tuple) else self.wall_color.getRgb()[:3]}</td></tr>
+                <tr><td>同色ドット壁省略</td><td>{'オン' if self.merge_walls_checkbox.isChecked() else 'オフ'}</td></tr>
+            </table>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>色情報</h2>
+        {color_table_html}
+    </div>
+    
+    <h2>プレビュー</h2>
+    <div class="image-container">
+        <div class="image-box">
+            <h3>オリジナル画像</h3>
+            <img src="{os.path.basename(original_img_path)}" alt="オリジナル画像">
+        </div>
+        <div class="image-box">
+            <h3>減色済みプレビュー</h3>
+            <img src="{os.path.basename(preview_img_path)}" alt="プレビュー画像">
+        </div>
+        <div class="image-box">
+            <h3>3Dモデルプレビュー</h3>
+            <img src="{os.path.basename(stl_preview_img_path)}" alt="STLプレビュー">
+        </div>
+    </div>
+    
+    <footer>
+        <p>Generated by Dot Plate Generator • {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+    </footer>
+</body>
+</html>
+"""
+        
+        # HTMLファイルに保存
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+            
+        print(f"HTMLレポートを保存しました: {html_path}")
+        return html_path
+        
+    except Exception as e:
+        print(f"HTMLレポート生成中にエラーが発生しました: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def get_color_statistics(self, mesh):
+    """メッシュ内の色の統計情報を取得する"""
+    try:
+        # 現在のピクセルデータを取得
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            return []
+        
+        # 各色の出現回数をカウント
+        color_counts = Counter()
+        grid_size = self.pixels_rounded_np.shape[0]
+        
+        for y in range(grid_size):
+            for x in range(grid_size):
+                pixel_color = tuple(self.pixels_rounded_np[y, x])
+                # 黒色（透明）をスキップ
+                if pixel_color != (0, 0, 0):
+                    color_counts[pixel_color] += 1
+        
+        # 各色のボリュームを計算
+        dot_size = self.controls['dot_size'].value()
+        wall_height = self.controls['wall_height'].value()
+        base_height = self.controls['base_height'].value()
+        
+        # 色の統計情報を作成
+        color_stats = []
+        total_dots = sum(color_counts.values())
+        
+        for color, count in color_counts.items():
+            # 1ドットあたりのボリュームを計算 (mm^3) - 簡易版
+            dot_volume = dot_size * dot_size * (base_height + wall_height)
+            color_volume = count * dot_volume
+            
+            # ボリューム百分率
+            volume_percent = (count / total_dots) * 100 if total_dots > 0 else 0
+            
+            # 統計情報を追加
+            color_stats.append({
+                'color': color,
+                'count': count,
+                'percentage': (count / total_dots) * 100 if total_dots > 0 else 0,
+                'volume': color_volume,
+                'volume_percent': volume_percent
+            })
+        
+        # 使用頻度順にソート
+        color_stats.sort(key=lambda x: x['count'], reverse=True)
+        
+        return color_stats
+        
+    except Exception as e:
+        print(f"色統計情報の取得中にエラーが発生しました: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+def generate_color_table_html(self, color_stats):
+    """色の統計情報からHTMLテーブルを生成する"""
+    if not color_stats:
+        return "<p>色情報が利用できません</p>"
+    
+    table_html = """
+    <table>
+        <tr>
+            <th>色</th>
+            <th>RGB値</th>
+            <th>ドット数</th>
+            <th>使用率</th>
+            <th>体積 (mm³)</th>
+            <th>体積比率</th>
+        </tr>
+    """
+    
+    for stat in color_stats:
+        color = stat['color']
+        color_rgb = f"rgb{color}"
+        count = stat['count']
+        percentage = f"{stat['percentage']:.1f}%"
+        volume = f"{stat['volume']:.1f}"
+        volume_percent = f"{stat['volume_percent']:.1f}%"
+        
+        table_html += f"""
+        <tr>
+            <td><div class="color-swatch" style="background-color:{color_rgb};"></div></td>
+            <td>{color}</td>
+            <td>{count}</td>
+            <td>{percentage}</td>
+            <td>{volume}</td>
+            <td>{volume_percent}</td>
+        </tr>
+        """
+    
+    table_html += """
+    </table>
+    """
+    
+    return table_html
+
 def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                            wall_thickness, wall_height, base_height,
                            color_step, top_color_limit, out_thickness=0.1, 
@@ -2769,6 +3012,293 @@ class DotPlateApp(QMainWindow):
             print(f"update_preview全体エラー: {str(e)}")
             self.input_label.setText(f"画像表示エラー: {str(e)}")
     
+    def generate_html_report(self, stl_path, mesh):
+        """STL情報とアプリの情報をHTMLレポートとして保存する"""
+        try:
+            # HTMLファイルパスを取得（STLと同じ名前＋.html）
+            html_path = f"{os.path.splitext(stl_path)[0]}.html"
+            
+            # パラメータ値を取得
+            params = {key: spin.value() for key, spin in self.controls.items()}
+            
+            # オリジナル画像と減色プレビュー画像のパス
+            timestamp = int(time.time())
+            original_img_path = f"{os.path.splitext(stl_path)[0]}_original_{timestamp}.png"
+            preview_img_path = f"{os.path.splitext(stl_path)[0]}_preview_{timestamp}.png"
+            stl_preview_img_path = f"{os.path.splitext(stl_path)[0]}_stl_preview_{timestamp}.png"
+            
+            # オリジナル画像の保存
+            original_img = Image.open(self.image_path).convert("RGB")
+            original_img.save(original_img_path)
+            
+            # 減色プレビュー画像の保存
+            if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+                preview_img = Image.fromarray(self.pixels_rounded_np, mode='RGB')
+                preview_img.save(preview_img_path)
+            else:
+                # 減色プレビューがなければオリジナルをコピー
+                preview_img_path = original_img_path
+            
+            # STLプレビュー画像の保存（すでに保存されている場合は再利用）
+            if hasattr(self, 'stl_preview_img_path') and os.path.exists(self.stl_preview_img_path):
+                # 既存のSTLプレビュー画像をコピー
+                import shutil
+                shutil.copy(self.stl_preview_img_path, stl_preview_img_path)
+            else:
+                # STLプレビュー画像を新規生成
+                self.generate_stl_preview_image(mesh, stl_preview_img_path)
+            
+            # 壁の色をRGBタプルに変換
+            if isinstance(self.wall_color, QColor):
+                wall_color = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
+            else:
+                wall_color = self.wall_color
+            
+            # アルゴリズム名の取得
+            algo_names = {
+                "simple": "単純量子化",
+                "median_cut": "メディアンカット法",
+                "kmeans": "K-means法",
+                "octree": "オクトツリー法",
+                "toon": "トゥーンアニメ風",
+                "none": "減色なし"
+            }
+            algo_name = algo_names.get(self.current_color_algo, "単純量子化")
+            
+            # STLの情報を取得
+            bounds = mesh.bounds
+            min_bounds = bounds[0]
+            max_bounds = bounds[1]
+            
+            width = max_bounds[0] - min_bounds[0]  # X方向の幅
+            depth = max_bounds[1] - min_bounds[1]  # Y方向の深さ
+            height = max_bounds[2] - min_bounds[2]  # Z方向の高さ
+            
+            # ドット数と色情報
+            total_dots = 0
+            unique_colors = 0
+            color_counts = Counter()
+            color_volumes = {}
+            
+            if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+                # 透明でないピクセルをカウント (RGB(0,0,0)は透明として扱う)
+                non_transparent_mask = (self.pixels_rounded_np != 0).any(axis=2)
+                total_dots = np.sum(non_transparent_mask)
+                
+                # 色ごとのドット数をカウント
+                colors = [tuple(pixel) for pixel in self.pixels_rounded_np.reshape(-1, 3) 
+                         if tuple(pixel) != (0, 0, 0)]
+                color_counts = Counter(colors)
+                unique_colors = len(color_counts)
+                
+                # 体積計算（ドットのサイズと各色のドット数から概算）
+                dot_size = float(params["Dot Size"])
+                base_height = float(params["Base Height"])
+                wall_height = float(params["Wall Height"])
+                dot_height = wall_height + base_height  # mm
+                dot_volume = dot_size * dot_size * dot_height  # mm³
+                
+                # 色ごとの体積を計算
+                for color, count in color_counts.items():
+                    color_volumes[color] = count * dot_volume
+            
+            # HTMLレポートの生成
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Dot Plate Generator - レポート</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; }}
+        h1, h2 {{ color: #333; }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        .images {{ display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; }}
+        .image-container {{ flex: 1; min-width: 300px; }}
+        .image-container img {{ max-width: 100%; height: auto; border: 1px solid #ddd; }}
+        .info-section {{ margin-bottom: 30px; }}
+        table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        .color-cell {{ width: 20px; height: 20px; display: inline-block; border: 1px solid #ccc; border-radius: 3px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Dot Plate Generator - プロジェクトレポート</h1>
+        
+        <div class="info-section">
+            <h2>ファイル情報</h2>
+            <table>
+                <tr><th>項目</th><th>値</th></tr>
+                <tr><td>入力ファイル</td><td>{self.image_path}</td></tr>
+                <tr><td>STL出力ファイル</td><td>{stl_path}</td></tr>
+                <tr><td>レポート作成日時</td><td>{time.strftime('%Y-%m-%d %H:%M:%S')}</td></tr>
+            </table>
+        </div>
+        
+        <div class="images">
+            <div class="image-container">
+                <h3>オリジナル画像</h3>
+                <img src="{os.path.basename(original_img_path)}" alt="オリジナル画像">
+            </div>
+            <div class="image-container">
+                <h3>減色プレビュー</h3>
+                <img src="{os.path.basename(preview_img_path)}" alt="減色プレビュー">
+            </div>
+            <div class="image-container">
+                <h3>STLプレビュー</h3>
+                <img src="{os.path.basename(stl_preview_img_path)}" alt="STLプレビュー">
+            </div>
+        </div>
+        
+        <div class="info-section">
+            <h2>パラメータ設定</h2>
+            <table>
+                <tr><th>パラメータ</th><th>値</th></tr>
+                <tr><td>グリッドサイズ</td><td>{params["Grid Size"]}</td></tr>
+                <tr><td>ドットサイズ</td><td>{params["Dot Size"]} mm</td></tr>
+                <tr><td>壁の厚さ</td><td>{params["Wall Thickness"]} mm</td></tr>
+                <tr><td>壁の高さ</td><td>{params["Wall Height"]} mm</td></tr>
+                <tr><td>ベースの高さ</td><td>{params["Base Height"]} mm</td></tr>
+                <tr><td>外壁の厚さ</td><td>{params["Out Thickness"]} mm</td></tr>
+                <tr><td>色ステップ</td><td>{params["Color Step"]}</td></tr>
+                <tr><td>上位色数</td><td>{params["Top Colors"]}</td></tr>
+                <tr><td>減色アルゴリズム</td><td>{algo_name}</td></tr>
+                <tr><td>壁の色</td><td style="display: flex; align-items: center;">
+                    <div class="color-cell" style="background-color: rgb{wall_color};"></div>
+                    &nbsp;RGB{wall_color}
+                </td></tr>
+                <tr><td>同色間内壁省略</td><td>{"あり" if self.merge_same_color_checkbox.isChecked() else "なし"}</td></tr>
+            </table>
+        </div>
+        
+        <div class="info-section">
+            <h2>STL情報</h2>
+            <table>
+                <tr><th>項目</th><th>値</th></tr>
+                <tr><td>最大幅 (X)</td><td>{width:.2f} mm</td></tr>
+                <tr><td>最大奥行き (Y)</td><td>{depth:.2f} mm</td></tr>
+                <tr><td>最大高さ (Z)</td><td>{height:.2f} mm</td></tr>
+                <tr><td>ドット数</td><td>{total_dots}</td></tr>
+                <tr><td>使用色数</td><td>{unique_colors}</td></tr>
+            </table>
+        </div>
+        
+        <div class="info-section">
+            <h2>色情報</h2>
+            <table>
+                <tr>
+                    <th style="width: 10%;">色</th>
+                    <th style="width: 30%;">RGB値</th>
+                    <th style="width: 30%;">ドット数</th>
+                    <th style="width: 30%;">推定体積 (mm³)</th>
+                </tr>
+"""
+
+            # 色ごとの詳細テーブルを追加
+            if color_counts:
+                # 色を使用頻度順にソート
+                sorted_colors = sorted(color_counts.items(), key=lambda x: x[1], reverse=True)
+                
+                # 各色の行を追加
+                for color, count in sorted_colors:
+                    r, g, b = color
+                    volume = color_volumes.get(color, 0)
+                    hex_color = f"#{r:02x}{g:02x}{b:02x}"
+                    
+                    html_content += f"""
+                <tr>
+                    <td style="text-align: center;">
+                        <div class="color-cell" style="background-color: {hex_color}; display: inline-block; width: 20px; height: 20px; border: 1px solid #ccc;"></div>
+                    </td>
+                    <td>RGB({r}, {g}, {b})</td>
+                    <td>{count}</td>
+                    <td>{volume:.2f}</td>
+                </tr>"""
+            
+            html_content += """
+            </table>
+        </div>
+    </div>
+</body>
+</html>"""
+            
+            # HTMLファイルに保存
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+                
+            self.statusBar().showMessage(f"HTMLレポートを保存しました: {html_path}")
+            return html_path
+            
+        except Exception as e:
+            print(f"HTMLレポート生成エラー: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+            
+    def generate_stl_preview_image(self, mesh, output_path):
+        """STLプレビュー画像を生成して保存"""
+        try:
+            # MatplotlibでのSTLプレビュー画像生成
+            import matplotlib.pyplot as plt
+            from matplotlib import rcParams
+            from mpl_toolkits.mplot3d import Axes3D
+            import numpy as np
+            
+            # プロット設定
+            rcParams['axes.labelsize'] = 8
+            rcParams['xtick.labelsize'] = 8
+            rcParams['ytick.labelsize'] = 8
+            
+            # 描画スペース確保
+            fig = plt.figure(figsize=(6, 6), dpi=100)
+            ax = fig.add_subplot(111, projection='3d')
+            
+            # メッシュの三角形を描画
+            vertices = mesh.vertices
+            faces = mesh.faces
+            
+            # 上面視点になるようにZ方向から見下ろす角度に設定
+            ax.view_init(elev=90, azim=-90)
+            
+            # 三角形をポリゴンとして描画
+            for face in faces:
+                verts = vertices[face]
+                tri = Axes3D.art3d.Poly3DCollection([verts])
+                tri.set_color('lightgray')
+                tri.set_edgecolor('black')
+                ax.add_collection3d(tri)
+            
+            # 軸の設定
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            
+            # 視点の調整
+            bounds = mesh.bounds
+            center = [(bounds[0][i] + bounds[1][i]) / 2 for i in range(3)]
+            max_range = max([bounds[1][i] - bounds[0][i] for i in range(3)])
+            
+            # すべての次元で等しいスケール
+            ax.set_xlim(center[0] - max_range/2, center[0] + max_range/2)
+            ax.set_ylim(center[1] - max_range/2, center[1] + max_range/2)
+            ax.set_zlim(center[2] - max_range/2, center[2] + max_range/2)
+            
+            # 余白を小さく
+            plt.tight_layout()
+            
+            # 画像として保存
+            plt.savefig(output_path)
+            plt.close()
+            
+            return output_path
+            
+        except Exception as e:
+            print(f"STLプレビュー画像生成エラー: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
     def export_stl(self):
         if not self.image_path:
             self.input_label.setText("画像が選択されていません")
@@ -2784,7 +3314,11 @@ class DotPlateApp(QMainWindow):
                 QApplication.processEvents()  # UIを更新
                 
                 # 壁の色をRGBタプルに変換
-                wall_color = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
+                if isinstance(self.wall_color, QColor):
+                    wall_color = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
+                else:
+                    # すでにタプルかリストの場合
+                    wall_color = self.wall_color
                 
                 # カスタム編集されたピクセルデータがあるかチェック
                 custom_pixels = self.pixels_rounded_np if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None else None
@@ -2921,8 +3455,19 @@ class DotPlateApp(QMainWindow):
                 # STLプレビューを表示
                 self.show_stl_preview(preview_mesh)
                 
-                color_name = f"RGB({self.wall_color.red()}, {self.wall_color.green()}, {self.wall_color.blue()})"
-                self.input_label.setText(f"{out_path} にカラーSTL（壁の色：{color_name}）をエクスポートしました")
+                # HTMLレポートを生成
+                html_path = self.generate_html_report(out_path, preview_mesh)
+                
+                # 壁の色の文字列表現を作成
+                if isinstance(self.wall_color, QColor):
+                    color_name = f"RGB({self.wall_color.red()}, {self.wall_color.green()}, {self.wall_color.blue()})"
+                else:
+                    # タプルやリストの場合
+                    color_name = f"RGB{self.wall_color}"
+                if html_path:
+                    self.input_label.setText(f"{out_path} にカラーSTL（壁の色：{color_name}）をエクスポートし、HTMLレポート {html_path} も生成しました")
+                else:
+                    self.input_label.setText(f"{out_path} にカラーSTL（壁の色：{color_name}）をエクスポートしました")
                 
             except Exception as e:
                 print(f"STL生成エラー: {str(e)}")
