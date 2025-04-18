@@ -18,8 +18,8 @@ from PyQt5.QtWidgets import (
     QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
     QColorDialog, QCheckBox, QComboBox, QMenu, QAction, QMenuBar
 )
-from PyQt5.QtCore import Qt, QSize, QTimer
-from PyQt5.QtGui import QPixmap, QImage, QColor
+from PyQt5.QtCore import Qt, QSize, QTimer, QPoint
+from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor
 from shapely.geometry import Polygon
 from skimage import measure
 from io import BytesIO
@@ -1313,6 +1313,7 @@ class DotPlateApp(QMainWindow):
         self.current_paint_color = QColor(255, 0, 0)  # デフォルト色：赤
         self.is_paint_mode = True      # ペイントモード（True）または選択モード（False）
         self.is_bucket_mode = False    # 塗りつぶしモード
+        self.brush_size = 1            # デフォルトのブラシサイズ
         
         # 減色アルゴリズム用変数
         self.current_color_algo = "simple"  # デフォルトアルゴリズム
@@ -1421,7 +1422,7 @@ class DotPlateApp(QMainWindow):
         
         # パラメータ定義
         parameters = [
-            ("Grid Size", 32, 8, 128),
+            ("Grid Size", 32, 8, 512),  # 512x512までの大きな画像に対応
             ("Dot Size", 2.0, 0.2, 5.0),
             ("Wall Thickness", 0.2, 0.0, 5.0),
             ("Wall Height", 0.4, 0.0, 5.0),
@@ -1586,9 +1587,26 @@ class DotPlateApp(QMainWindow):
         history_toolbar.addWidget(undo_btn)
         history_toolbar.addWidget(redo_btn)
         
+        # ブラシサイズコントロール
+        brush_size_toolbar = QHBoxLayout()
+        brush_size_label = QLabel("ブラシサイズ:")
+        self.brush_size_slider = QSlider(Qt.Horizontal)
+        self.brush_size_slider.setMinimum(1)
+        self.brush_size_slider.setMaximum(10)
+        self.brush_size_slider.setValue(self.brush_size)  # 初期値
+        self.brush_size_slider.setFixedWidth(100)
+        self.brush_size_slider.setToolTip("ブラシのサイズを調整します (1-10)")
+        self.brush_size_slider.valueChanged.connect(self.on_brush_size_changed)
+        self.brush_size_value_label = QLabel(str(self.brush_size))
+        
+        brush_size_toolbar.addWidget(brush_size_label)
+        brush_size_toolbar.addWidget(self.brush_size_slider)
+        brush_size_toolbar.addWidget(self.brush_size_value_label)
+        
         # ツールバーをメインレイアウトに追加
         edit_toolbar.addLayout(mode_toolbar)
         edit_toolbar.addLayout(color_toolbar)
+        edit_toolbar.addLayout(brush_size_toolbar)
         edit_toolbar.addLayout(history_toolbar)
         
         # 操作方法説明用のツールチップ
@@ -1888,6 +1906,14 @@ class DotPlateApp(QMainWindow):
         # 塗りつぶしモードはペイントモードの時のみ有効
         if not is_paint:
             self.is_bucket_mode = False
+        
+        # カーソルの更新
+        if is_paint and not self.eyedropper_mode and not self.is_bucket_mode:
+            # ペイントモードならブラシサイズに合わせたカーソルに
+            self.update_paint_cursor()
+        elif hasattr(self, 'preview_label'):
+            # 選択モードなら通常カーソルに
+            self.preview_label.setCursor(Qt.ArrowCursor)
             
         # ステータスバー更新
         mode_name = "ペンモード" if is_paint else "選択モード"
@@ -1901,6 +1927,13 @@ class DotPlateApp(QMainWindow):
         if is_bucket:
             self.is_paint_mode = True
             self.mode_buttons[0].setChecked(True)
+            # 塗りつぶしモードのカーソル
+            if hasattr(self, 'preview_label'):
+                self.preview_label.setCursor(Qt.PointingHandCursor)
+        else:
+            # ペイントモードならブラシサイズに合わせたカーソル
+            if self.is_paint_mode and not self.eyedropper_mode and hasattr(self, 'preview_label'):
+                self.update_paint_cursor()
             
         # ステータスバー更新
         mode_name = "塗りつぶしモード" if is_bucket else "ペンモード"
@@ -1917,8 +1950,12 @@ class DotPlateApp(QMainWindow):
             self.preview_label.setCursor(Qt.CrossCursor)
         else:
             self.statusBar().showMessage("準備完了")
-            # カーソルを元に戻す
-            self.preview_label.setCursor(Qt.ArrowCursor)
+            # ペイントモードではブラシサイズに合わせたカーソルを表示
+            if self.is_paint_mode and not self.is_bucket_mode:
+                self.update_paint_cursor()
+            else:
+                # 通常カーソル
+                self.preview_label.setCursor(Qt.ArrowCursor)
     
     def select_paint_color(self):
         """ペイントに使用する色を選択"""
@@ -1969,27 +2006,36 @@ class DotPlateApp(QMainWindow):
             color = [self.current_paint_color.red(), 
                      self.current_paint_color.green(), 
                      self.current_paint_color.blue()]
+        
+        # ブラシサイズの取得
+        brush_size = self.brush_size
             
-        try:
-            # NumPy配列は[row, col]=[y, x]の順でアクセス
-            array_y = grid_y
-            array_x = grid_x
-            
-            # 現在の色と同じなら変更しない
-            current_color = self.pixels_rounded_np[array_y, array_x]
-            if tuple(current_color) == tuple(color):
-                return False
-                
-            # 編集前の状態を履歴に保存（最初の変更時のみ）
-            self.save_edit_history()
-                
-            # ピクセルの色を更新
-            self.pixels_rounded_np[array_y, array_x] = color
-            return True
-            
-        except IndexError:
-            print(f"座標[{array_y}, {array_x}]はインデックス範囲外です")
-            return False
+        # 編集前の状態を履歴に保存（最初の変更時のみ）
+        has_painted = False
+        self.save_edit_history()
+        
+        # ブラシサイズに基づいてピクセルを塗る
+        # ブラシの形は円形に近い形にする
+        for dy in range(-brush_size+1, brush_size):
+            for dx in range(-brush_size+1, brush_size):
+                # 円形のブラシパターンを作る（ユークリッド距離）
+                if dx*dx + dy*dy < brush_size*brush_size:
+                    array_x = grid_x + dx
+                    array_y = grid_y + dy
+                    
+                    # グリッド範囲内かチェック
+                    if 0 <= array_x < self.current_grid_size and 0 <= array_y < self.current_grid_size:
+                        try:
+                            # 現在の色と同じなら変更しない
+                            current_color = self.pixels_rounded_np[array_y, array_x]
+                            if tuple(current_color) != tuple(color):
+                                # ピクセルの色を更新
+                                self.pixels_rounded_np[array_y, array_x] = color
+                                has_painted = True
+                        except IndexError:
+                            print(f"座標[{array_y}, {array_x}]はインデックス範囲外です")
+        
+        return has_painted
             
     def bucket_fill(self, grid_x, grid_y):
         """塗りつぶし処理 - 同じ色の隣接ドットを全て指定色で塗る"""
@@ -2465,6 +2511,43 @@ class DotPlateApp(QMainWindow):
             print(f"プレビュークリアエラー: {str(e)}")
             self.input_label.setText(f"プレビュークリアエラー: {str(e)}")
     
+    def on_brush_size_changed(self, value):
+        """ブラシサイズが変更されたときの処理"""
+        self.brush_size = value
+        self.brush_size_value_label.setText(str(value))
+        self.statusBar().showMessage(f"ブラシサイズ: {value}")
+        
+        # ペイントモードのときはカーソルを更新
+        if self.is_paint_mode and not self.eyedropper_mode and not self.is_bucket_mode:
+            self.update_paint_cursor()
+    
+    def update_paint_cursor(self):
+        """現在のブラシサイズに合わせてカーソルを更新"""
+        if not hasattr(self, 'preview_label'):
+            return
+            
+        # ブラシサイズに合わせたカーソルを作成
+        if self.brush_size <= 1:
+            # サイズ1ならデフォルトのカーソル
+            self.preview_label.setCursor(Qt.ArrowCursor)
+        else:
+            # カスタムカーソルを作成
+            cursor_size = min(64, max(16, self.brush_size * 6))  # ブラシサイズに比例したカーソルサイズ
+            pixmap = QPixmap(cursor_size, cursor_size)
+            pixmap.fill(Qt.transparent)  # 透明で初期化
+            
+            # 円を描画
+            painter = QPainter(pixmap)
+            painter.setPen(QPen(Qt.black, 1))
+            painter.setBrush(Qt.transparent)  # 塗りつぶさない
+            painter.drawEllipse(2, 2, cursor_size-4, cursor_size-4)  # 少し小さめに描画
+            painter.end()
+            
+            # カーソルのホットスポットは中心
+            hotspot = QPoint(cursor_size // 2, cursor_size // 2)
+            cursor = QCursor(pixmap, hotspot.x(), hotspot.y())
+            self.preview_label.setCursor(cursor)
+    
     def update_preview(self, custom_pixels=None):
         """プレビュー画像を更新する（custom_pixelsが指定された場合はそれを使用）"""
         if not self.image_path:
@@ -2662,7 +2745,7 @@ class DotPlateApp(QMainWindow):
                 elif self.is_bucket_mode:
                     self.preview_label.setCursor(Qt.PointingHandCursor)  # 塗りつぶしモード
                 elif self.is_paint_mode:
-                    self.preview_label.setCursor(Qt.ArrowCursor)  # ペイントモード
+                    self.update_paint_cursor()  # ブラシサイズに合わせたカーソル
                 else:
                     self.preview_label.setCursor(Qt.ArrowCursor)  # 選択モード
                 
