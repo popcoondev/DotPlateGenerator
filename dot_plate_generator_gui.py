@@ -22,6 +22,7 @@ from PyQt5.QtCore import Qt, QSize, QTimer, QPoint
 from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor
 from shapely.geometry import Polygon
 from skimage import measure
+from scipy.ndimage import binary_fill_holes
 from io import BytesIO
 import threading
 import time
@@ -703,6 +704,8 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     pixels_rounded_np = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
     # 黒色（0,0,0）を透過色として扱い、マスクから除外する
     mask = np.array([[tuple(px) != (0, 0, 0) for px in row] for row in pixels_rounded_np]).astype(np.uint8)
+    # Fill interior holes to avoid unsupported cavities in upper layers
+    mask = binary_fill_holes(mask).astype(np.uint8)
     
     base_blocks = []
     wall_blocks = []
@@ -946,6 +949,42 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     # 色情報を返すかどうか
     if return_colors:
         return mesh, pixels_rounded_np
+    return mesh
+
+def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, base_height, layer_heights):
+    """Generate STL with per-color layer heights."""
+    # Create base plate
+    total_width = grid_size * dot_size
+    total_depth = grid_size * dot_size
+    plate = box(extents=[total_width, total_depth, base_height])
+    plate.apply_translation([total_width / 2, total_depth / 2, base_height / 2])
+
+    blocks = [plate]
+    cumulative_z = base_height
+    # Place blocks per color in order of layer_heights
+    for color in layer_heights:
+        height = layer_heights[color]
+        if height <= 0:
+            continue
+        # Find positions of this color
+        positions = np.argwhere(
+            np.all(pixels_rounded_np == np.array(color, dtype=np.uint8), axis=2)
+        )
+        for y, x in positions:
+            x0 = x * dot_size
+            y0 = (grid_size - 1 - y) * dot_size
+            block = box(extents=[dot_size, dot_size, height])
+            # center position
+            block.apply_translation([
+                x0 + dot_size / 2,
+                y0 + dot_size / 2,
+                cumulative_z + height / 2
+            ])
+            blocks.append(block)
+        cumulative_z += height
+
+    mesh = trimesh.util.concatenate(blocks)
+    mesh.export(output_path)
     return mesh
 
 # -------------------------------
@@ -1753,6 +1792,23 @@ class DotPlateApp(QMainWindow):
         param_group_layout.addWidget(param_scroll)
         param_group.setLayout(param_group_layout)
         column1_layout.addWidget(param_group)
+        # レイヤー設定パネル
+        self.layer_group = QGroupBox("レイヤー設定")
+        # レイヤーモード有効化オプション
+        self.layer_mode_checkbox = QCheckBox("色レイヤーモードを有効にする")
+        self.layer_mode_checkbox.setChecked(False)
+        # 各色ごとの高さ設定用スクロールエリア
+        self.layer_scroll = QScrollArea()
+        self.layer_scroll.setWidgetResizable(True)
+        self.layer_scroll_content = QWidget()
+        self.layer_scroll_content_layout = QVBoxLayout(self.layer_scroll_content)
+        self.layer_scroll.setWidget(self.layer_scroll_content)
+        # レイアウト設定
+        layer_group_layout = QVBoxLayout()
+        layer_group_layout.addWidget(self.layer_mode_checkbox)
+        layer_group_layout.addWidget(self.layer_scroll)
+        self.layer_group.setLayout(layer_group_layout)
+        column1_layout.addWidget(self.layer_group)
         
         # カラム2：ペイント操作、プレビュー、ズームバー
         column2_panel = QWidget()
@@ -2993,6 +3049,8 @@ class DotPlateApp(QMainWindow):
                 
                 self.preview_label.setPixmap(preview_pixmap)
                 self.preview_label.adjustSize()
+                # Refresh layer settings UI
+                self.update_layer_controls()
                 
                 # カーソルをモードに応じて変更
                 if self.eyedropper_mode:
@@ -3299,6 +3357,44 @@ class DotPlateApp(QMainWindow):
             traceback.print_exc()
             return None
     
+    def update_layer_controls(self):
+        """Refresh the layer settings controls based on current pixels_rounded_np"""
+        # Clear existing controls
+        for i in reversed(range(self.layer_scroll_content_layout.count())):
+            widget = self.layer_scroll_content_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+        # Initialize layer_heights dict if not present
+        if not hasattr(self, 'layer_heights'):
+            self.layer_heights = {}
+        # Collect unique colors excluding black
+        if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+            arr = self.pixels_rounded_np.reshape(-1, 3)
+            counts = Counter([tuple(c) for c in arr])
+            colors = [color for color, _ in counts.most_common() if color != (0, 0, 0)]
+            self.layer_color_order = colors
+            for color in colors:
+                # Ensure a default height entry exists
+                default_h = self.layer_heights.get(color, 0.2)
+                self.layer_heights[color] = default_h
+                # Thumbnail
+                label = QLabel()
+                pixmap = QPixmap(20, 20)
+                pixmap.fill(QColor(*color))
+                label.setPixmap(pixmap)
+                # Spin box for height
+                spin = QDoubleSpinBox()
+                spin.setRange(0.0, 10.0)
+                spin.setSingleStep(0.1)
+                spin.setValue(default_h)
+                # Connect value change
+                spin.valueChanged.connect(lambda val, c=color: self.layer_heights.__setitem__(c, val))
+                # Layout row
+                row = QHBoxLayout()
+                row.addWidget(label)
+                row.addWidget(spin)
+                self.layer_scroll_content_layout.addLayout(row)
+    
     def export_stl(self):
         if not self.image_path:
             self.input_label.setText("画像が選択されていません")
@@ -3322,6 +3418,24 @@ class DotPlateApp(QMainWindow):
                 
                 # カスタム編集されたピクセルデータがあるかチェック
                 custom_pixels = self.pixels_rounded_np if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None else None
+                # レイヤーモードが有効なら色ごとに積層生成
+                if hasattr(self, 'layer_mode_checkbox') and self.layer_mode_checkbox.isChecked():
+                    # Re-quantize pixels to ensure layering is based on latest reduced-color result
+                    self.update_preview()
+                    mesh = generate_layered_stl(
+                        self.pixels_rounded_np,
+                        out_path,
+                        int(params["Grid Size"]),
+                        float(params["Dot Size"]),
+                        float(params["Base Height"]),
+                        self.layer_heights
+                    )
+                    # プレビューとレポート生成
+                    preview_mesh = mesh
+                    self.show_stl_preview(preview_mesh)
+                    html_path = self.generate_html_report(out_path, preview_mesh)
+                    self.input_label.setText(f"{out_path} に色レイヤーモードSTLをエクスポートしました")
+                    return
                 
                 # メッシュ生成（メッシュも返すように指定）
                 if custom_pixels is not None:
