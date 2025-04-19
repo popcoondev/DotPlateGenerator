@@ -703,9 +703,9 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
     pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
     pixels_rounded_np = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
     # 黒色（0,0,0）を透過色として扱い、マスクから除外する
-    mask = np.array([[tuple(px) != (0, 0, 0) for px in row] for row in pixels_rounded_np]).astype(np.uint8)
-    # Fill interior holes to avoid unsupported cavities in upper layers
-    mask = binary_fill_holes(mask).astype(np.uint8)
+    # Mask out transparent pixels (black) to discard them from STL
+    mask = np.array([[tuple(px) != (0, 0, 0) for px in row] for row in pixels_rounded_np], dtype=np.uint8)
+    # Do not fill interior holes here; preserve transparent areas
     
     base_blocks = []
     wall_blocks = []
