@@ -951,7 +951,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
         return mesh, pixels_rounded_np
     return mesh
 
-def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, base_height, wall_thickness, wall_height, layer_heights):
+def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, base_height, wall_thickness, wall_height, layer_heights, layer_order):
     """Generate STL with per-color layer heights."""
     # Create base blocks for non-transparent pixels (exclude transparent color)
     blocks = []
@@ -970,8 +970,8 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
                     base_height / 2
                 ])
                 blocks.append(base_block)
-    # Prepare color layers
-    colors = list(layer_heights.keys())
+    # Prepare color layers in specified order
+    colors = [c for c in layer_order if c in layer_heights]
     # Process each color layer
     for idx, color in enumerate(colors):
         h = layer_heights[color]
@@ -1191,6 +1191,14 @@ class DotPlateApp(QMainWindow):
             # 同色マージオプションを保存
             if hasattr(self, 'merge_same_color_checkbox'):
                 project_data['merge_same_color'] = self.merge_same_color_checkbox.isChecked()
+            # レイヤー設定（色ごとの高さと順序）を保存
+            if hasattr(self, 'layer_color_order') and hasattr(self, 'layer_heights'):
+                layers = []
+                for color in self.layer_color_order:
+                    # color is a tuple (r,g,b)
+                    h = self.layer_heights.get(color, 0.0)
+                    layers.append({ 'color': [int(color[0]), int(color[1]), int(color[2])], 'height': float(h) })
+                project_data['layers'] = layers
             
             # ファイルに書き込み
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -1292,6 +1300,22 @@ class DotPlateApp(QMainWindow):
             # 同色マージオプションを復元
             if 'merge_same_color' in project_data and hasattr(self, 'merge_same_color_checkbox'):
                 self.merge_same_color_checkbox.setChecked(project_data['merge_same_color'])
+            # レイヤー設定を復元 (色ごとの高さと順序)
+            if 'layers' in project_data:
+                layers = project_data.get('layers', [])
+                # initialize containers
+                self.layer_color_order = []
+                self.layer_heights = {}
+                for entry in layers:
+                    col = entry.get('color')
+                    h = entry.get('height', 0.0)
+                    if isinstance(col, (list, tuple)) and len(col) >= 3:
+                        color = (int(col[0]), int(col[1]), int(col[2]))
+                        self.layer_color_order.append(color)
+                        self.layer_heights[color] = float(h)
+                # ensure layer mode checkbox is visible
+                if hasattr(self, 'layer_mode_checkbox'):
+                    self.layer_mode_checkbox.setChecked(True)
             
             # 編集履歴を初期化
             self.edit_history = []
@@ -3398,21 +3422,41 @@ class DotPlateApp(QMainWindow):
     
     def update_layer_controls(self):
         """Refresh the layer settings controls based on current pixels_rounded_np"""
-        # Clear existing controls
-        for i in reversed(range(self.layer_scroll_content_layout.count())):
-            widget = self.layer_scroll_content_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
+        # Clear existing controls (remove all widgets and nested layouts)
+        def clear_layout(layout):
+            # Recursively remove all items from given layout
+            while layout.count():
+                item = layout.takeAt(0)
+                # Remove widget items
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+                # Remove nested layouts
+                nested = item.layout()
+                if nested:
+                    clear_layout(nested)
+        clear_layout(self.layer_scroll_content_layout)
         # Initialize layer_heights dict if not present
         if not hasattr(self, 'layer_heights'):
             self.layer_heights = {}
-        # Collect unique colors excluding black
+        # Collect unique colors excluding transparent (black)
         if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
             arr = self.pixels_rounded_np.reshape(-1, 3)
             counts = Counter([tuple(c) for c in arr])
-            colors = [color for color, _ in counts.most_common() if color != (0, 0, 0)]
-            self.layer_color_order = colors
-            for color in colors:
+            present = [color for color, _ in counts.most_common() if color != (0, 0, 0)]
+            # Initialize or update order: keep existing order, append new
+            if not hasattr(self, 'layer_color_order') or not self.layer_color_order:
+                self.layer_color_order = present.copy()
+            else:
+                new_order = [c for c in self.layer_color_order if c in present]
+                for c in present:
+                    if c not in new_order:
+                        new_order.append(c)
+                self.layer_color_order = new_order
+            # Build controls in layer order
+            for color in self.layer_color_order:
+                if color not in present:
+                    continue
                 # Ensure a default height entry exists
                 default_h = self.layer_heights.get(color, 0.2)
                 self.layer_heights[color] = default_h
@@ -3426,14 +3470,41 @@ class DotPlateApp(QMainWindow):
                 spin.setRange(0.0, 10.0)
                 spin.setSingleStep(0.1)
                 spin.setValue(default_h)
-                # Connect value change
                 spin.valueChanged.connect(lambda val, c=color: self.layer_heights.__setitem__(c, val))
+                # Up/Down buttons for ordering
+                up_btn = QPushButton("▲")
+                up_btn.setFixedSize(20, 20)
+                up_btn.clicked.connect(lambda _, c=color: self.move_layer_up(c))
+                down_btn = QPushButton("▼")
+                down_btn.setFixedSize(20, 20)
+                down_btn.clicked.connect(lambda _, c=color: self.move_layer_down(c))
                 # Layout row
                 row = QHBoxLayout()
                 row.addWidget(label)
                 row.addWidget(spin)
+                row.addWidget(up_btn)
+                row.addWidget(down_btn)
                 self.layer_scroll_content_layout.addLayout(row)
     
+    # Layer ordering controls
+    def move_layer_up(self, color):
+        """Move the specified color one layer up in the order."""
+        if hasattr(self, 'layer_color_order'):
+            idx = self.layer_color_order.index(color)
+            if idx > 0:
+                self.layer_color_order[idx], self.layer_color_order[idx-1] = (
+                    self.layer_color_order[idx-1], self.layer_color_order[idx])
+                self.update_layer_controls()
+
+    def move_layer_down(self, color):
+        """Move the specified color one layer down in the order."""
+        if hasattr(self, 'layer_color_order'):
+            idx = self.layer_color_order.index(color)
+            if idx < len(self.layer_color_order) - 1:
+                self.layer_color_order[idx], self.layer_color_order[idx+1] = (
+                    self.layer_color_order[idx+1], self.layer_color_order[idx])
+                self.update_layer_controls()
+
     def export_stl(self):
         if not self.image_path:
             self.input_label.setText("画像が選択されていません")
@@ -3459,8 +3530,7 @@ class DotPlateApp(QMainWindow):
                 custom_pixels = self.pixels_rounded_np if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None else None
                 # レイヤーモードが有効なら色ごとに積層生成
                 if hasattr(self, 'layer_mode_checkbox') and self.layer_mode_checkbox.isChecked():
-                    # Re-quantize pixels to ensure layering is based on latest reduced-color result
-                    self.update_preview()
+                    # 色レイヤーモード：編集済みピクセルを使用して積層STLを生成
                     mesh = generate_layered_stl(
                         self.pixels_rounded_np,
                         out_path,
@@ -3469,7 +3539,8 @@ class DotPlateApp(QMainWindow):
                         float(params["Base Height"]),
                         float(params["Wall Thickness"]),
                         float(params["Wall Height"]),
-                        self.layer_heights
+                        self.layer_heights,
+                        self.layer_color_order
                     )
                     # プレビューとレポート生成
                     preview_mesh = mesh
