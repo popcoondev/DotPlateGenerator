@@ -743,11 +743,11 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                     is_top_edge = y == 0 or not mask[y-1, x]
                     is_bottom_edge = y == grid_size - 1 or not mask[y+1, x]
                 
-                # 各方向の拡張量を計算
-                extend_left = 0 if has_left else out_thickness
-                extend_right = 0 if has_right else out_thickness
-                extend_top = 0 if has_top else out_thickness
-                extend_bottom = 0 if has_bottom else out_thickness
+                # ベースと外周壁の外側拡張: プレート外周のみ適用
+                extend_left = out_thickness if x == 0 else 0
+                extend_right = out_thickness if x == grid_size - 1 else 0
+                extend_top = out_thickness if y == 0 else 0
+                extend_bottom = out_thickness if y == grid_size - 1 else 0
                 
                 # 基準座標を設定（拡張なしの場合）
                 x0 = x * dot_size
@@ -811,32 +811,34 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 # 壁ボックスのリスト
                 wall_boxes = []
                 
-                # 左側の壁 - 同じ色の場合は壁を作らない
-                if is_left_edge:  # 左端または左が空白または隣接ドットが異なる色（外周）
-                    wall_boxes.append(lr_outer_wall_boxes[0])  # 厚い外周壁
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    wall_boxes.append(lr_wall_boxes[0])  # 通常の内側壁
+                # 左側の壁
+                if x == 0:
+                    # プレート外周の外側拡張壁
+                    wall_boxes.append(lr_outer_wall_boxes[0])
+                elif not merge_same_color or is_left_edge:
+                    # 内部壁または色差や隣接欠損部の通常壁
+                    wall_boxes.append(lr_wall_boxes[0])
                 # merge_same_color=True かつ同色の場合は壁を追加しない
                 
-                # 右側の壁 - 同じ色の場合は壁を作らない
-                if is_right_edge:  # 右端または右が空白または隣接ドットが異なる色（外周）
-                    wall_boxes.append(lr_outer_wall_boxes[1])  # 厚い外周壁
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    wall_boxes.append(lr_wall_boxes[1])  # 通常の内側壁
+                # 右側の壁
+                if x == grid_size - 1:
+                    wall_boxes.append(lr_outer_wall_boxes[1])
+                elif not merge_same_color or is_right_edge:
+                    wall_boxes.append(lr_wall_boxes[1])
                 # merge_same_color=True かつ同色の場合は壁を追加しない
                 
-                # 上側の壁 - 同じ色の場合は壁を作らない
-                if is_top_edge:  # 上端または上が空白または隣接ドットが異なる色（外周）
-                    wall_boxes.append(tb_outer_wall_boxes[0])  # 厚い外周壁
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    wall_boxes.append(tb_wall_boxes[0])  # 通常の内側壁
+                # 上側の壁
+                if y == 0:
+                    wall_boxes.append(tb_outer_wall_boxes[0])
+                elif not merge_same_color or is_top_edge:
+                    wall_boxes.append(tb_wall_boxes[0])
                 # merge_same_color=True かつ同色の場合は壁を追加しない
                 
-                # 下側の壁 - 同じ色の場合は壁を作らない
-                if is_bottom_edge:  # 下端または下が空白または隣接ドットが異なる色（外周）
-                    wall_boxes.append(tb_outer_wall_boxes[1])  # 厚い外周壁
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    wall_boxes.append(tb_wall_boxes[1])  # 通常の内側壁
+                # 下側の壁
+                if y == grid_size - 1:
+                    wall_boxes.append(tb_outer_wall_boxes[1])
+                elif not merge_same_color or is_bottom_edge:
+                    wall_boxes.append(tb_wall_boxes[1])
                 # merge_same_color=True かつ同色の場合は壁を追加しない
                 
                 # 壁の位置を設定する
