@@ -1868,7 +1868,14 @@ class DotPlateApp(QMainWindow):
         self.layer_scroll.setWidget(self.layer_scroll_content)
         # レイアウト設定
         layer_group_layout = QVBoxLayout()
+        # レイヤーモード有効化チェック
         layer_group_layout.addWidget(self.layer_mode_checkbox)
+        # レイヤー更新ボタン（手動更新）
+        self.layer_refresh_button = QPushButton("レイヤーを更新")
+        self.layer_refresh_button.setToolTip("最新のドットデータでレイヤー設定を更新します")
+        self.layer_refresh_button.clicked.connect(self.update_layer_controls)
+        layer_group_layout.addWidget(self.layer_refresh_button)
+        # 各色ごとの高さ設定用スクロール領域
         layer_group_layout.addWidget(self.layer_scroll)
         self.layer_group.setLayout(layer_group_layout)
         column1_layout.addWidget(self.layer_group)
@@ -3112,8 +3119,6 @@ class DotPlateApp(QMainWindow):
                 
                 self.preview_label.setPixmap(preview_pixmap)
                 self.preview_label.adjustSize()
-                # Refresh layer settings UI
-                self.update_layer_controls()
                 
                 # カーソルをモードに応じて変更
                 if self.eyedropper_mode:
