@@ -961,27 +961,34 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
 
     blocks = [plate]
     cumulative_z = base_height
-    # Place blocks per color in order of layer_heights
-    for color in layer_heights:
-        height = layer_heights[color]
-        if height <= 0:
+    # Place blocks per color in layer order, with support filling to avoid cavities
+    colors = list(layer_heights.keys())
+    for idx, color in enumerate(colors):
+        h = layer_heights[color]
+        if h <= 0:
+            cumulative_z += h
             continue
-        # Find positions of this color
-        positions = np.argwhere(
-            np.all(pixels_rounded_np == np.array(color, dtype=np.uint8), axis=2)
-        )
+        # Support region: any pixel that belongs to this layer or above
+        support_colors = colors[idx:]
+        # Build mask of positions to fill
+        mask = np.zeros((grid_size, grid_size), dtype=bool)
+        for sc in support_colors:
+            sc_arr = np.array(sc, dtype=np.uint8)
+            mask |= np.all(pixels_rounded_np == sc_arr, axis=2)
+        # Add blocks for this layer
+        positions = np.argwhere(mask)
         for y, x in positions:
             x0 = x * dot_size
             y0 = (grid_size - 1 - y) * dot_size
-            block = box(extents=[dot_size, dot_size, height])
-            # center position
+            block = box(extents=[dot_size, dot_size, h])
+            # Position block bottom at cumulative_z
             block.apply_translation([
                 x0 + dot_size / 2,
                 y0 + dot_size / 2,
-                cumulative_z + height / 2
+                cumulative_z + h / 2
             ])
             blocks.append(block)
-        cumulative_z += height
+        cumulative_z += h
 
     mesh = trimesh.util.concatenate(blocks)
     mesh.export(output_path)
