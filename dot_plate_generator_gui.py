@@ -1820,12 +1820,18 @@ class DotPlateApp(QMainWindow):
                 def spin_changed():
                     value = self.controls[label].value()
                     self.sliders[label].setValue(int(value * slider_factor))
+                    # Clear pixel data when changing parameters that affect color quantization
+                    if label in ("Grid Size", "Color Step", "Top Colors") and hasattr(self, "pixels_rounded_np"):
+                        self.pixels_rounded_np = None
                     self.update_preview()
                 return spin_changed
             
             def make_slider_changed(label, is_int, slider_factor):
                 def slider_changed(value):
                     self.controls[label].setValue(value / slider_factor)
+                    # Clear pixel data when changing parameters that affect color quantization
+                    if label in ("Grid Size", "Color Step", "Top Colors") and hasattr(self, "pixels_rounded_np"):
+                        self.pixels_rounded_np = None
                     self.update_preview()
                 return slider_changed
             
@@ -2927,6 +2933,10 @@ class DotPlateApp(QMainWindow):
     
     def update_preview(self, custom_pixels=None):
         """プレビュー画像を更新する（custom_pixelsが指定された場合はそれを使用）"""
+        # If pixel data (edited) already exists and no explicit custom_pixels passed,
+        # reuse existing pixels to avoid resetting on parameter changes
+        if custom_pixels is None and hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+            custom_pixels = self.pixels_rounded_np
         if not self.image_path:
             return
         
