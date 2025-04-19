@@ -773,145 +773,57 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 }
                 
                 base_blocks.append(block)
-                
-                # ドットの区切り壁とベースの輪郭壁を分けて処理
-                # 通常の内側壁と外周壁で厚みを区別する
-                
-                # 壁の長さを計算（ベースの寸法に合わせる）
-                left_wall_length = base_depth
-                right_wall_length = base_depth
-                top_wall_length = base_width
-                bottom_wall_length = base_width
-                
-                # まずすべてのドットに対して基本的な内壁を作成
-                # 左・右の内側壁（基本壁）
-                lr_wall_boxes = [
-                    box(extents=[wall_thickness, left_wall_length, wall_height]),
-                    box(extents=[wall_thickness, right_wall_length, wall_height]),
-                ]
-                
-                # 上・下の内側壁（基本壁）
-                tb_wall_boxes = [
-                    box(extents=[top_wall_length, wall_thickness, wall_height]),
-                    box(extents=[bottom_wall_length, wall_thickness, wall_height]),
-                ]
-                
-                # 外周壁（追加の厚みあり）- 外部に面しているドットのみに適用
-                # 左・右の外周壁
-                lr_outer_wall_boxes = [
-                    box(extents=[wall_thickness + out_thickness, left_wall_length, wall_height]),
-                    box(extents=[wall_thickness + out_thickness, right_wall_length, wall_height]),
-                ]
-                # 上・下の外周壁
-                tb_outer_wall_boxes = [
-                    box(extents=[top_wall_length, wall_thickness + out_thickness, wall_height]),
-                    box(extents=[bottom_wall_length, wall_thickness + out_thickness, wall_height]),
-                ]
-                
-                # 壁ボックスのリスト
-                wall_boxes = []
-                
-                # 左側の壁
+                # 壁の生成（右・下方向の内部壁と外周の左・上境界のみ）
+                # 右壁または右外周壁
+                right_neighbor = mask[y, x+1] if x < grid_size-1 else False
+                if (not right_neighbor) or x == grid_size-1 or (not merge_same_color):
+                    thickness = wall_thickness + (out_thickness if x == grid_size-1 else 0)
+                    w = box(extents=[thickness, dot_size, wall_height])
+                    pos_x = x0 + dot_size + thickness / 2
+                    pos_y = y0 + dot_size / 2
+                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                    wall_blocks.append(w)
+                # 下壁または下外周壁
+                bottom_neighbor = mask[y+1, x] if y < grid_size-1 else False
+                if (not bottom_neighbor) or y == grid_size-1 or (not merge_same_color):
+                    thickness = wall_thickness + (out_thickness if y == grid_size-1 else 0)
+                    w = box(extents=[dot_size, thickness, wall_height])
+                    pos_x = x0 + dot_size / 2
+                    pos_y = y0 - thickness / 2
+                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                    wall_blocks.append(w)
+                # 左外周壁
                 if x == 0:
-                    # プレート外周の外側拡張壁
-                    wall_boxes.append(lr_outer_wall_boxes[0])
-                elif not merge_same_color or is_left_edge:
-                    # 内部壁または色差や隣接欠損部の通常壁
-                    wall_boxes.append(lr_wall_boxes[0])
-                # merge_same_color=True かつ同色の場合は壁を追加しない
-                
-                # 右側の壁
-                if x == grid_size - 1:
-                    wall_boxes.append(lr_outer_wall_boxes[1])
-                elif not merge_same_color or is_right_edge:
-                    wall_boxes.append(lr_wall_boxes[1])
-                # merge_same_color=True かつ同色の場合は壁を追加しない
-                
-                # 上側の壁
+                    # 外周左壁
+                    thickness = wall_thickness + out_thickness
+                    w = box(extents=[thickness, dot_size, wall_height])
+                    pos_x = x0 - thickness / 2
+                    pos_y = y0 + dot_size / 2
+                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                    wall_blocks.append(w)
+                # 左内部壁（隣接ドットなし）
+                if x > 0 and not mask[y, x-1]:
+                    w = box(extents=[wall_thickness, dot_size, wall_height])
+                    pos_x = x0 - wall_thickness / 2
+                    pos_y = y0 + dot_size / 2
+                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                    wall_blocks.append(w)
+                # 上外周壁
                 if y == 0:
-                    wall_boxes.append(tb_outer_wall_boxes[0])
-                elif not merge_same_color or is_top_edge:
-                    wall_boxes.append(tb_wall_boxes[0])
-                # merge_same_color=True かつ同色の場合は壁を追加しない
-                
-                # 下側の壁
-                if y == grid_size - 1:
-                    wall_boxes.append(tb_outer_wall_boxes[1])
-                elif not merge_same_color or is_bottom_edge:
-                    wall_boxes.append(tb_wall_boxes[1])
-                # merge_same_color=True かつ同色の場合は壁を追加しない
-                
-                # 壁の位置を設定する
-                positions = []
-                
-                # 左側の壁の位置 - wall_boxesに追加された分だけ位置も計算
-                if is_left_edge:  # 左端または左が空白または隣接ドットが異なる色（外周）
-                    # 左外周壁の位置（外側に厚みを追加）
-                    positions.append([
-                        x0 - extend_left + (wall_thickness + out_thickness) / 2, 
-                        y_center,  # ベースの中心Y座標を使用
-                        base_height + wall_height / 2
-                    ])
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    # 通常の左内側壁
-                    positions.append([
-                        x0 + wall_thickness / 2,
-                        y_center,
-                        base_height + wall_height / 2
-                    ])
-                
-                # 右側の壁の位置 - wall_boxesに追加された分だけ位置も計算
-                if is_right_edge:  # 右端または右が空白または隣接ドットが異なる色（外周）
-                    # 右外周壁の位置（外側に厚みを追加）
-                    positions.append([
-                        x0 + dot_size + extend_right - (wall_thickness + out_thickness) / 2,
-                        y_center,
-                        base_height + wall_height / 2
-                    ])
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    # 通常の右内側壁
-                    positions.append([
-                        x0 + dot_size - wall_thickness / 2,
-                        y_center,
-                        base_height + wall_height / 2
-                    ])
-                
-                # 上側の壁の位置 - wall_boxesに追加された分だけ位置も計算
-                if is_top_edge:  # 上端または上が空白または隣接ドットが異なる色（外周）
-                    # 上外周壁の位置（外側に厚みを追加）
-                    positions.append([
-                        x_center,  # ベースの中心X座標を使用
-                        y0 + dot_size + extend_top - (wall_thickness + out_thickness) / 2,
-                        base_height + wall_height / 2
-                    ])
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    # 通常の上内側壁
-                    positions.append([
-                        x_center,
-                        y0 + wall_thickness / 2,
-                        base_height + wall_height / 2
-                    ])
-                
-                # 下側の壁の位置 - wall_boxesに追加された分だけ位置も計算
-                if is_bottom_edge:  # 下端または下が空白または隣接ドットが異なる色（外周）
-                    # 下外周壁の位置（外側に厚みを追加）
-                    positions.append([
-                        x_center,
-                        y0 - extend_bottom + (wall_thickness + out_thickness) / 2,
-                        base_height + wall_height / 2
-                    ])
-                elif not merge_same_color:  # 同色でも壁を作る場合
-                    # 通常の下内側壁
-                    positions.append([
-                        x_center,
-                        y0 + dot_size - wall_thickness / 2,
-                        base_height + wall_height / 2
-                    ])
-                
-                for i, (wbox, pos) in enumerate(zip(wall_boxes, positions)):
-                    wbox.apply_translation(pos)
-                    # 壁には独自の色情報を付けない（後で一律に指定色にする）
-                    wall_blocks.append(wbox)
+                    # 外周上壁
+                    thickness = wall_thickness + out_thickness
+                    w = box(extents=[dot_size, thickness, wall_height])
+                    pos_x = x0 + dot_size / 2
+                    pos_y = y0 + dot_size + thickness / 2
+                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                    wall_blocks.append(w)
+                # 上内部壁（隣接ドットなし）
+                if y > 0 and not mask[y-1, x]:
+                    w = box(extents=[dot_size, wall_thickness, wall_height])
+                    pos_x = x0 + dot_size / 2
+                    pos_y = y0 + dot_size + wall_thickness / 2
+                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                    wall_blocks.append(w)
     
     # メッシュを作成
     mesh = trimesh.util.concatenate(base_blocks + wall_blocks)
