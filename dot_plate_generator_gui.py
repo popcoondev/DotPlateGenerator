@@ -951,7 +951,7 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
         return mesh, pixels_rounded_np
     return mesh
 
-def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, base_height, layer_heights):
+def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, base_height, wall_thickness, wall_height, layer_heights):
     """Generate STL with per-color layer heights."""
     # Create base blocks for non-transparent pixels (exclude transparent color)
     blocks = []
@@ -972,33 +972,56 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
                 blocks.append(base_block)
     # Prepare color layers
     colors = list(layer_heights.keys())
+    # Process each color layer
     for idx, color in enumerate(colors):
         h = layer_heights[color]
         if h <= 0:
             cumulative_z += h
             continue
-        # Support region: any pixel that belongs to this layer or above
+        z0 = cumulative_z
+        # Support region: fill under higher layers
         support_colors = colors[idx:]
-        # Build mask of positions to fill
-        mask = np.zeros((grid_size, grid_size), dtype=bool)
+        mask_support = np.zeros((grid_size, grid_size), dtype=bool)
         for sc in support_colors:
             sc_arr = np.array(sc, dtype=np.uint8)
-            mask |= np.all(pixels_rounded_np == sc_arr, axis=2)
-        # Add blocks for this layer
-        positions = np.argwhere(mask)
-        for y, x in positions:
+            mask_support |= np.all(pixels_rounded_np == sc_arr, axis=2)
+        # Add support blocks
+        for y, x in np.argwhere(mask_support):
             x0 = x * dot_size
             y0 = (grid_size - 1 - y) * dot_size
             block = box(extents=[dot_size, dot_size, h])
-            # Position block bottom at cumulative_z
-            block.apply_translation([
-                x0 + dot_size / 2,
-                y0 + dot_size / 2,
-                cumulative_z + h / 2
-            ])
+            block.apply_translation([x0 + dot_size/2, y0 + dot_size/2, z0 + h/2])
             blocks.append(block)
+        # Add perimeter walls for this layer's actual color region (height = wall_height)
+        color_arr = np.array(color, dtype=np.uint8)
+        mask_color = np.all(pixels_rounded_np == color_arr, axis=2)
+        wt = wall_thickness
+        for y, x in np.argwhere(mask_color):
+            x0 = x * dot_size
+            y0 = (grid_size - 1 - y) * dot_size
+            y_center = y0 + dot_size/2
+            # Left wall
+            if x == 0 or not mask_color[y, x-1]:
+                w = box(extents=[wt, dot_size, wall_height])
+                w.apply_translation([x0 - wt/2, y_center, z0 + wall_height/2])
+                blocks.append(w)
+            # Right wall
+            if x == grid_size-1 or not mask_color[y, x+1]:
+                w = box(extents=[wt, dot_size, wall_height])
+                w.apply_translation([x0 + dot_size + wt/2, y_center, z0 + wall_height/2])
+                blocks.append(w)
+            # Top wall (positive Y direction)
+            if y == 0 or not mask_color[y-1, x]:
+                w = box(extents=[dot_size, wt, wall_height])
+                w.apply_translation([x0 + dot_size/2, y0 + dot_size + wt/2, z0 + wall_height/2])
+                blocks.append(w)
+            # Bottom wall (negative Y direction)
+            if y == grid_size-1 or not mask_color[y+1, x]:
+                w = box(extents=[dot_size, wt, wall_height])
+                w.apply_translation([x0 + dot_size/2, y0 - wt/2, z0 + wall_height/2])
+                blocks.append(w)
         cumulative_z += h
-
+    # Concatenate all blocks and export
     mesh = trimesh.util.concatenate(blocks)
     mesh.export(output_path)
     return mesh
@@ -3444,6 +3467,8 @@ class DotPlateApp(QMainWindow):
                         int(params["Grid Size"]),
                         float(params["Dot Size"]),
                         float(params["Base Height"]),
+                        float(params["Wall Thickness"]),
+                        float(params["Wall Height"]),
                         self.layer_heights
                     )
                     # プレビューとレポート生成
