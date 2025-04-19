@@ -1881,6 +1881,11 @@ class DotPlateApp(QMainWindow):
         self.layer_refresh_button.setToolTip("最新のドットデータでレイヤー設定を更新します")
         self.layer_refresh_button.clicked.connect(self.update_layer_controls)
         layer_group_layout.addWidget(self.layer_refresh_button)
+        # レイヤー設定を別ウィンドウで開くボタン
+        self.layer_popup_button = QPushButton("別ウィンドウで開く")
+        self.layer_popup_button.setToolTip("レイヤー設定を別ウィンドウで開きます")
+        self.layer_popup_button.clicked.connect(self.show_layer_settings_dialog)
+        layer_group_layout.addWidget(self.layer_popup_button)
         # 各色ごとの高さ設定用スクロール領域
         layer_group_layout.addWidget(self.layer_scroll)
         self.layer_group.setLayout(layer_group_layout)
@@ -3519,6 +3524,83 @@ class DotPlateApp(QMainWindow):
                 self.layer_color_order[idx], self.layer_color_order[idx+1] = (
                     self.layer_color_order[idx+1], self.layer_color_order[idx])
                 self.update_layer_controls()
+    
+    def show_layer_settings_dialog(self):
+        """ポップアップウィンドウでレイヤー設定を開く"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("レイヤー設定 (別ウィンドウ)")
+        dialog.resize(400, 500)
+        self.layer_dialog = dialog
+        layout = QVBoxLayout(dialog)
+        # レイヤーモードチェックボックス
+        cb = QCheckBox("色レイヤーモードを有効にする")
+        cb.setChecked(self.layer_mode_checkbox.isChecked())
+        cb.toggled.connect(self.layer_mode_checkbox.setChecked)
+        layout.addWidget(cb)
+        # 更新ボタン
+        refresh_btn = QPushButton("レイヤーを更新")
+        refresh_btn.setToolTip("最新のドットデータでレイヤー設定を更新します")
+        def on_refresh():
+            refresh_content()
+            self.update_layer_controls()
+        refresh_btn.clicked.connect(on_refresh)
+        layout.addWidget(refresh_btn)
+        # スクロールエリア
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+        # コンテンツ更新関数
+        def refresh_content():
+            # クリア
+            while content_layout.count():
+                item = content_layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+                l = item.layout()
+                if l:
+                    while l.count():
+                        sub = l.takeAt(0)
+                        w2 = sub.widget()
+                        if w2:
+                            w2.deleteLater()
+            # 各色ごとに行を作成
+            for color in self.layer_color_order:
+                if color == (0, 0, 0):
+                    continue
+                h = self.layer_heights.get(color, 0.2)
+                # カラーサムネイル
+                label = QLabel()
+                pixmap = QPixmap(20, 20)
+                pixmap.fill(QColor(*color))
+                label.setPixmap(pixmap)
+                # 高さスピンボックス
+                spin = QDoubleSpinBox()
+                spin.setRange(0.0, 10.0)
+                spin.setSingleStep(0.1)
+                spin.setValue(h)
+                spin.valueChanged.connect(lambda val, c=color: self.layer_heights.__setitem__(c, val))
+                spin.valueChanged.connect(lambda val: self.update_layer_controls())
+                # 順序移動ボタン
+                up_btn = QPushButton("▲")
+                up_btn.setFixedSize(20, 20)
+                up_btn.clicked.connect(lambda _, c=color: [self.move_layer_up(c), refresh_content(), self.update_layer_controls()])
+                down_btn = QPushButton("▼")
+                down_btn.setFixedSize(20, 20)
+                down_btn.clicked.connect(lambda _, c=color: [self.move_layer_down(c), refresh_content(), self.update_layer_controls()])
+                # 行レイアウト
+                row = QHBoxLayout()
+                row.addWidget(label)
+                row.addWidget(spin)
+                row.addWidget(up_btn)
+                row.addWidget(down_btn)
+                content_layout.addLayout(row)
+        # 初期表示
+        refresh_content()
+        dialog.show()
 
     def export_stl(self):
         if not self.image_path:
