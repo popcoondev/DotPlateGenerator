@@ -953,15 +953,24 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
 
 def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, base_height, layer_heights):
     """Generate STL with per-color layer heights."""
-    # Create base plate
-    total_width = grid_size * dot_size
-    total_depth = grid_size * dot_size
-    plate = box(extents=[total_width, total_depth, base_height])
-    plate.apply_translation([total_width / 2, total_depth / 2, base_height / 2])
-
-    blocks = [plate]
+    # Create base blocks for non-transparent pixels (exclude transparent color)
+    blocks = []
     cumulative_z = base_height
-    # Place blocks per color in layer order, with support filling to avoid cavities
+    transparent_color = (0, 0, 0)
+    # Base layer: for each pixel not transparent, add a block of base_height
+    for y in range(grid_size):
+        for x in range(grid_size):
+            if tuple(pixels_rounded_np[y, x]) != transparent_color:
+                x0 = x * dot_size
+                y0 = (grid_size - 1 - y) * dot_size
+                base_block = box(extents=[dot_size, dot_size, base_height])
+                base_block.apply_translation([
+                    x0 + dot_size / 2,
+                    y0 + dot_size / 2,
+                    base_height / 2
+                ])
+                blocks.append(base_block)
+    # Prepare color layers
     colors = list(layer_heights.keys())
     for idx, color in enumerate(colors):
         h = layer_heights[color]
