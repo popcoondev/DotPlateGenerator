@@ -18,6 +18,8 @@ from PyQt5.QtWidgets import (
     QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
     QColorDialog, QCheckBox, QComboBox, QMenu, QAction, QMenuBar
 )
+# 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
+from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
 from PyQt5.QtCore import Qt, QSize, QTimer, QPoint
 from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor
 from shapely.geometry import Polygon
@@ -25,6 +27,8 @@ from skimage import measure
 from scipy.ndimage import binary_fill_holes
 from io import BytesIO
 import threading
+import openai  # OpenAI API for AIブラシ機能
+import ast
 import time
 import tempfile
 
@@ -428,16 +432,17 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
     if highlight_pos is not None:
         draw_grid_highlight(highlight_pos, (255, 0, 0, 255), width_factor=10)  # 赤色の枠線
     
-    # 特定の色を持つドットをすべてハイライト
+    # 特定の色に近いドットをすべてハイライト（ユークリッド距離による近似）
     if highlight_color is not None:
         r, g, b = highlight_color
-        # 一致する色を探す
+        # ハイライトに使用する距離の閾値（0-255の色空間）
+        threshold = 30
         for y in range(grid_size):
             for x in range(grid_size):
                 pixel_color = tuple(pixels_array[y, x])
-                if pixel_color == (r, g, b):
-                    # 色が一致するドットにハイライト
-                    draw_grid_highlight((x, y), (255, 0, 0, 255), width_factor=15)  # 赤色の枠線
+                # 色空間で近い色を検出
+                if distance.euclidean(pixel_color, (r, g, b)) <= threshold:
+                    draw_grid_highlight((x, y), (255, 0, 0, 255), width_factor=15)
     
     return result
 
@@ -1122,6 +1127,20 @@ class DotPlateApp(QMainWindow):
         clear_action = QAction('プレビューをクリア', self)
         clear_action.triggered.connect(self.clear_preview_for_scratch)
         edit_menu.addAction(clear_action)
+        # 設定メニュー: APIキー設定
+        settings_menu = menubar.addMenu('設定')
+        api_key_action = QAction('APIキー設定', self)
+        api_key_action.triggered.connect(self.show_api_key_dialog)
+        settings_menu.addAction(api_key_action)
+    
+    def show_api_key_dialog(self):
+        """OpenAI APIキーを設定するダイアログを表示"""
+        # 入力ダイアログでAPIキーを取得
+        key, ok = QInputDialog.getText(self, "APIキー設定", "OpenAI APIキーを入力してください:", QLineEdit.Normal, getattr(self, 'openai_api_key', ''))
+        if ok and key:
+            self.openai_api_key = key
+            openai.api_key = key
+            self.statusBar().showMessage("APIキーが設定されました")
     
     def save_project(self):
         """プロジェクトをファイルに保存する"""
@@ -1559,6 +1578,16 @@ class DotPlateApp(QMainWindow):
         
         # メニューバーを作成
         self.create_menu_bar()
+        # 環境変数からOpenAI APIキーを読み込む
+        api_key_env = os.getenv("OPENAI_API_KEY")
+        if api_key_env:
+            self.openai_api_key = api_key_env
+            openai.api_key = api_key_env
+            self.statusBar().showMessage("APIキーを環境変数から設定されました")
+        # AIブラシ用の初期設定
+        self.ai_brush_mode = False
+        self.ai_highlight_pixels = []
+        self.ai_brush_target_color = None  # AIブラシで対象とする色
         
         # メインウィジェットとレイアウト（3カラム構成）
         main_widget = QWidget()
@@ -1926,6 +1955,14 @@ class DotPlateApp(QMainWindow):
         
         # モードボタンをグループ化
         self.mode_buttons = [paint_mode_btn, select_mode_btn]
+        # AIブラシモード切り替えボタン
+        self.ai_brush_btn = QPushButton("AIブラシ")
+        self.ai_brush_btn.setToolTip("AIブラシモード: クリックしてAIブラシ機能を使用")
+        self.ai_brush_btn.setCheckable(True)
+        self.ai_brush_btn.setMinimumWidth(60)
+        self.ai_brush_btn.clicked.connect(self.toggle_ai_brush_mode)
+        # モードボタンに追加
+        self.mode_buttons.append(self.ai_brush_btn)
         
         # カラーピッカーボタン（現在のペイント色表示）
         self.color_pick_btn = QPushButton()
@@ -1963,6 +2000,7 @@ class DotPlateApp(QMainWindow):
         mode_toolbar.addWidget(paint_mode_btn)
         mode_toolbar.addWidget(bucket_mode_btn)
         mode_toolbar.addWidget(select_mode_btn)
+        mode_toolbar.addWidget(self.ai_brush_btn)
         
         color_toolbar = QHBoxLayout()
         color_toolbar.addWidget(self.color_pick_btn)
@@ -2279,6 +2317,24 @@ class DotPlateApp(QMainWindow):
         new_zoom = max(1, min(self.zoom_slider.maximum(), current_zoom + zoom_change))
         self.zoom_slider.setValue(new_zoom)
         
+    def toggle_ai_brush_mode(self, checked):
+        """AIブラシモードの切り替え処理"""
+        self.ai_brush_mode = checked
+        if checked:
+            # 他の編集モードを解除
+            self.is_paint_mode = False
+            self.is_bucket_mode = False
+            self.eyedropper_mode = False
+            # モードボタン状態の更新
+            for btn in self.mode_buttons:
+                btn.setChecked(btn == self.ai_brush_btn)
+            self.statusBar().showMessage("AIブラシモード")
+            self.preview_label.setCursor(Qt.ArrowCursor)
+        else:
+            # ペンモードに戻す
+            self.set_paint_mode(True)
+            self.statusBar().clearMessage()
+
     def set_paint_mode(self, is_paint):
         """ペイントモードと選択モードの切り替え"""
         self.is_paint_mode = is_paint
@@ -2494,6 +2550,10 @@ class DotPlateApp(QMainWindow):
         """減色後のプレビュー画像内のドットがクリックされたときの処理"""
         if self.pixels_rounded_np is None:
             return
+        # AIブラシモードの場合は専用処理
+        if self.ai_brush_mode:
+            self.handle_ai_brush_click(grid_x, grid_y)
+            return
         
         # スポイトモードの場合は色を取得
         if self.eyedropper_mode:
@@ -2567,6 +2627,72 @@ class DotPlateApp(QMainWindow):
         except IndexError as e:
             print(f"座標変換エラー: {e}")
             return
+    # AIブラシモード用クリック処理
+    def handle_ai_brush_click(self, grid_x, grid_y):
+        """AIブラシモードでのクリック処理"""
+        if self.pixels_rounded_np is None:
+            return
+        try:
+            selected_color = tuple(self.pixels_rounded_np[grid_y, grid_x])
+        except Exception:
+            return
+        self.ai_brush_target_color = selected_color
+        # ハイライト表示
+        self.update_preview(custom_pixels=self.pixels_rounded_np, highlight_color=selected_color)
+        # 実行確認
+        reply = QMessageBox.question(self, "AIブラシ適用確認", "AIブラシを実行しますか？", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            updated_pixels = self.call_ai_brush_api(selected_color, grid_x, grid_y)
+            if updated_pixels is not None:
+                # 編集履歴に追加
+                self.edit_history = self.edit_history[:self.history_position+1]
+                self.edit_history.append(updated_pixels.copy())
+                self.history_position += 1
+                self.pixels_rounded_np = updated_pixels
+                self.update_preview(custom_pixels=self.pixels_rounded_np)
+        # モード解除後はペンモードに戻す
+        self.ai_brush_btn.setChecked(False)
+        self.ai_brush_mode = False
+        self.set_paint_mode(True)
+
+    def call_ai_brush_api(self, selected_color, grid_x, grid_y):
+        """OpenAI APIを使用してピクセルデータを更新する"""
+        if not getattr(self, 'openai_api_key', None):
+            QMessageBox.warning(self, "APIキー未設定", "まず[設定]メニューからAPIキーを設定してください。")
+            return None
+        self.statusBar().showMessage("AIブラシ処理中...")
+        try:
+            # ピクセルデータをJSONに変換
+            pixel_list = self.pixels_rounded_np.tolist()
+            # プロンプト作成
+            brush_color = (self.current_paint_color.red(), self.current_paint_color.green(), self.current_paint_color.blue())
+            # プロンプト：選択した色に近いピクセルを指定色に変更するよう指示
+            prompt = (
+                f"ピクセルデータは三重配列のJSONです。選択された座標({grid_x},{grid_y})の色{selected_color}に近い色のすべてのピクセルを"
+                f"指定の色{brush_color}に変更してください。変更後のピクセルデータ配列をJSON形式のみで返してください。"
+            )
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant for pixel editing."},
+                {"role": "user", "content": prompt + " ピクセルデータ: " + json.dumps(pixel_list)}
+            ]
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                temperature=0
+            )
+            content = response.choices[0].message.content.strip()
+            # JSONパース
+            try:
+                new_pixels = json.loads(content)
+            except json.JSONDecodeError:
+                new_pixels = ast.literal_eval(content)
+            arr = np.array(new_pixels, dtype=np.uint8)
+            return arr
+        except Exception as e:
+            QMessageBox.critical(self, "AIブラシエラー", f"AIブラシ処理中にエラーが発生しました: {e}")
+            return None
+        finally:
+            self.statusBar().clearMessage()
     
     def pick_color_for_paint(self, color, dialog=None):
         """選択したドットの色をペイント色として設定"""
@@ -2936,7 +3062,7 @@ class DotPlateApp(QMainWindow):
             cursor = QCursor(pixmap, hotspot.x(), hotspot.y())
             self.preview_label.setCursor(cursor)
     
-    def update_preview(self, custom_pixels=None):
+    def update_preview(self, custom_pixels=None, highlight_color=None):
         """プレビュー画像を更新する（custom_pixelsが指定された場合はそれを使用）"""
         # If pixel data (edited) already exists and no explicit custom_pixels passed,
         # reuse existing pixels to avoid resetting on parameter changes
@@ -3004,7 +3130,8 @@ class DotPlateApp(QMainWindow):
                         custom_pixels=self.pixels_rounded_np,
                         highlight_pos=highlight_pos,
                         hover_pos=hover_pos,
-                        color_algo=self.current_color_algo
+                        color_algo=self.current_color_algo,
+                        highlight_color=highlight_color
                     )
                 else:
                     # 新たに画像を生成
@@ -3016,7 +3143,8 @@ class DotPlateApp(QMainWindow):
                         self.zoom_factor,
                         highlight_pos=highlight_pos,
                         hover_pos=hover_pos,
-                        color_algo=self.current_color_algo
+                        color_algo=self.current_color_algo,
+                        highlight_color=highlight_color
                     )
             except Exception as e:
                 # エラーが発生した場合、カスタムピクセルを無視して再試行
@@ -3029,7 +3157,8 @@ class DotPlateApp(QMainWindow):
                     int(params["Color Step"]),
                     int(params["Top Colors"]),
                     self.zoom_factor,
-                    color_algo="simple"
+                    color_algo="simple",
+                    highlight_color=highlight_color
                 )
             
             # カスタムピクセルを使用していない場合のみ、ピクセルデータを生成
