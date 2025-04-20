@@ -2701,11 +2701,46 @@ class DotPlateApp(QMainWindow):
                     messages=messages,
                     temperature=0
                 )
-            content = response.choices[0].message.content.strip()
-            # JSONパース
+            # モデル応答からテキストを取得
+            raw = response.choices[0].message.content.strip()
+            text = raw
+            # Markdownコードフェンスを除去
+            if text.startswith('```'):
+                parts = text.split('```')
+                # フェンス内の先頭にあるJSON/リストを探す
+                for part in parts:
+                    p = part.strip()
+                    if p.startswith('[') or p.startswith('{'):
+                        text = p
+                        break
+            # 先頭のリスト/オブジェクトをバランスマッチで抽出
+            def extract_balance(s, open_ch, close_ch):
+                start = s.find(open_ch)
+                if start < 0:
+                    return None
+                lvl = 1
+                for idx in range(start+1, len(s)):
+                    c = s[idx]
+                    if c == open_ch:
+                        lvl += 1
+                    elif c == close_ch:
+                        lvl -= 1
+                        if lvl == 0:
+                            return s[start:idx+1]
+                return None
+            content = None
+            # 優先してリストを抽出
+            content = extract_balance(text, '[', ']')
+            if content is None:
+                # 次にオブジェクトを抽出
+                content = extract_balance(text, '{', '}')
+            # 抽出できなければ生テキストを使う
+            if content is None:
+                content = text
+            # JSONパース or Pythonリテラル評価
             try:
                 new_pixels = json.loads(content)
-            except json.JSONDecodeError:
+            except Exception:
                 new_pixels = ast.literal_eval(content)
             arr = np.array(new_pixels, dtype=np.uint8)
             return arr
