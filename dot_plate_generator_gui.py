@@ -2959,13 +2959,32 @@ class DotPlateApp(QMainWindow):
         return super().event(event)
     
     def select_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "画像を開く", "", "画像ファイル (*.png *.jpg *.jpeg *.gif)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "画像を開く",
+            "",
+            "画像ファイル (*.png *.jpg *.jpeg *.gif *.bmp)"
+        )
         if path:
             self.image_path = path
             self.input_label.setText(path)
+            # BMPファイルの場合はグリッドサイズを自動検出
+            try:
+                if path.lower().endswith('.bmp'):
+                    img = Image.open(path)
+                    w, h = img.size
+                    # 正方形グリッドを想定し、幅を優先
+                    grid_size = w if w == h else w
+                    # コントロールが存在すれば値を設定（範囲外は自動的にクランプされる）
+                    if hasattr(self, 'controls') and 'Grid Size' in self.controls:
+                        self.controls['Grid Size'].setValue(int(grid_size))
+            except Exception:
+                # 自動検出失敗時は何もしない
+                pass
             # 新しい画像を選択したらハイライトをクリア
             if hasattr(self.preview_label, 'last_clicked_pos'):
                 self.preview_label.last_clicked_pos = None
+            # プレビュー更新
             self.update_preview()
     
     def on_color_algo_changed(self, index):
