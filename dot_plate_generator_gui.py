@@ -1136,14 +1136,34 @@ class DotPlateApp(QMainWindow):
         try:
             img_full = Image.open(self.image_path)
             full_w, full_h = img_full.size
+            # 表示画像上の選択矩形を元画像座標にマッピング
             pixmap = self.original_image_label.pixmap()
+            if pixmap is None:
+                raise ValueError("表示中の画像がありません。")
             disp_w, disp_h = pixmap.width(), pixmap.height()
+            # ラベル上での画像表示位置（中央寄せ）によるオフセット
+            label_w = self.original_image_label.width()
+            label_h = self.original_image_label.height()
+            offset_x = max((label_w - disp_w) / 2, 0)
+            offset_y = max((label_h - disp_h) / 2, 0)
+            # 選択矩形を画像描画領域内に変換
+            x_pix = rect.x() - offset_x
+            y_pix = rect.y() - offset_y
+            # 幅・高さ
+            w_pix = rect.width()
+            h_pix = rect.height()
+            # 画像領域外へのはみ出しを防ぐ
+            x_pix = min(max(x_pix, 0), disp_w)
+            y_pix = min(max(y_pix, 0), disp_h)
+            end_x = min(x_pix + w_pix, disp_w)
+            end_y = min(y_pix + h_pix, disp_h)
+            # 元画像へのスケーリング
             scale_x = full_w / disp_w
             scale_y = full_h / disp_h
-            x0 = int(rect.x() * scale_x)
-            y0 = int(rect.y() * scale_y)
-            x1 = int((rect.x() + rect.width()) * scale_x)
-            y1 = int((rect.y() + rect.height()) * scale_y)
+            x0 = int(x_pix * scale_x)
+            y0 = int(y_pix * scale_y)
+            x1 = int(end_x * scale_x)
+            y1 = int(end_y * scale_y)
             cropped = img_full.crop((x0, y0, x1, y1))
             suffix = os.path.splitext(self.image_path)[1] or '.png'
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -1151,10 +1171,10 @@ class DotPlateApp(QMainWindow):
             self.image_path = tmp.name
             self.input_label.setText(self.image_path)
             # カスタムピクセルデータをクリアして、新画像でプレビュー再生成
-            if hasattr(self, 'pixels_rounded_np'):
-                self.pixels_rounded_np = None
-            # プレビューを更新
-            self.update_preview()
+            # （既存のピクセルデータを破棄し、トリム後の画像で再生成）
+            self.pixels_rounded_np = None
+            # プレビューを更新（custom_pixels=Noneを明示して新規生成）
+            self.update_preview(custom_pixels=None)
             QMessageBox.information(self, "トリム完了", "選択範囲で画像をトリムしました。")
         except Exception as e:
             QMessageBox.critical(self, "トリムエラー", f"トリミング処理中にエラーが発生しました: {e}")
