@@ -1170,6 +1170,16 @@ class DotPlateApp(QMainWindow):
             cropped.save(tmp.name)
             self.image_path = tmp.name
             self.input_label.setText(self.image_path)
+            # BMP画像をトリミングした場合は、ドット数に合わせてGrid Sizeを更新
+            try:
+                if suffix.lower() == '.bmp' and hasattr(self, 'controls') and 'Grid Size' in self.controls:
+                    # croppedはPIL Imageのまま利用
+                    w_crop, h_crop = cropped.size
+                    grid_size = w_crop if w_crop == h_crop else w_crop
+                    # スピンボックスに反映
+                    self.controls['Grid Size'].setValue(int(grid_size))
+            except Exception:
+                pass
             # カスタムピクセルデータをクリアして、新画像でプレビュー再生成
             # （既存のピクセルデータを破棄し、トリム後の画像で再生成）
             self.pixels_rounded_np = None
