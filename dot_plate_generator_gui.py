@@ -14,9 +14,10 @@ import trimesh
 from trimesh.creation import box
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
-    QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout, QDoubleSpinBox,
-    QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
-    QColorDialog, QCheckBox, QComboBox, QMenu, QAction, QMenuBar, QRubberBand
+    QListWidget, QListWidgetItem, QVBoxLayout, QHBoxLayout, QSlider, QSpinBox,
+    QGridLayout, QDoubleSpinBox, QToolButton, QDialog, QGroupBox, QFrame,
+    QSizePolicy, QToolTip, QMainWindow, QColorDialog, QCheckBox, QComboBox,
+    QMenu, QAction, QMenuBar, QRubberBand, QAbstractItemView
 )
 # 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
 from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
@@ -1596,35 +1597,67 @@ class DotPlateApp(QMainWindow):
         
         # STLプレビューも更新（現在のパラメータを使用）
         try:
-            # 一時ファイルを生成
-            with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp_file:
-                tmp_path = tmp_file.name
-            
-            # 現在のパラメータを取得
+            # 一時的に編集済みピクセルを画像ファイルとして保存
+            from PIL import Image
+            import os
+            # 保存先パス生成
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img_file:
+                img_path = tmp_img_file.name
+            # カスタムピクセル画像を保存
+            img = Image.fromarray(modified_pixels, mode='RGB')
+            img.save(img_path)
+            # パラメータ取得
             params = {key: spin.value() for key, spin in self.controls.items()}
-            
-            # STLを一時ファイルに生成
-            preview_mesh = generate_dot_plate_stl(
-                self.image_path,
-                tmp_path,
-                self.current_grid_size,
-                float(params["Dot Size"]), 
-                float(params["Base Height"]),
-                float(params["Wall Height"]),
-                float(params["Wall Thickness"]),
-                self.pixels_rounded_np
+            # 各パラメータ
+            grid_size = int(params.get("Grid Size", 0))
+            dot_size = float(params.get("Dot Size", 0.0))
+            wall_thickness = float(params.get("Wall Thickness", 0.0))
+            wall_height = float(params.get("Wall Height", 0.0))
+            base_height = float(params.get("Base Height", 0.0))
+            color_step = int(params.get("Color Step", 1))
+            top_color_limit = int(params.get("Top Colors", 0))
+            out_thickness = float(params.get("Out Thickness", 0.0))
+            # 壁色とマージオプション
+            if hasattr(self, 'wall_color') and isinstance(self.wall_color, QColor):
+                wall_clr = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
+            else:
+                wall_clr = getattr(self, 'wall_color', (255, 255, 255))
+            merge_same = self.merge_same_color_checkbox.isChecked() if hasattr(self, 'merge_same_color_checkbox') else False
+            # 一時的なSTL出力ファイル
+            with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp_stl_file:
+                stl_path = tmp_stl_file.name
+            # STL生成 (カラーステップ済み入力画像を使用)
+            mesh = generate_dot_plate_stl(
+                img_path,
+                stl_path,
+                grid_size,
+                dot_size,
+                wall_thickness,
+                wall_height,
+                base_height,
+                color_step,
+                top_color_limit,
+                out_thickness,
+                wall_color=wall_clr,
+                merge_same_color=merge_same,
+                return_colors=True
             )
-            
-            # STLプレビューを更新
+            # プレビュー更新
+            # generate_dot_plate_stlは (mesh, colors) を返す場合がある
+            preview_mesh = mesh[0] if isinstance(mesh, tuple) else mesh
             self.show_stl_preview(preview_mesh)
-            
-            # 後片付け
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
         except Exception as e:
             print(f"STLプレビュー更新エラー: {str(e)}")
+        finally:
+            # 一時ファイル削除
+            try:
+                os.unlink(img_path)
+            except:
+                pass
+            try:
+                os.unlink(stl_path)
+            except:
+                pass
         
         # ステータスバー更新
         count = np.sum(target_mask)
@@ -1634,6 +1667,9 @@ class DotPlateApp(QMainWindow):
             self.statusBar().showMessage("該当する色のドットは見つかりませんでした")
     def __init__(self):
         super().__init__()
+        # Initialize layer settings defaults
+        self.layer_heights = {}
+        self.layer_color_order = []
         self.setWindowTitle("Dot Plate Generator")
         self.setMinimumSize(1200, 700)
         
@@ -1970,12 +2006,17 @@ class DotPlateApp(QMainWindow):
         # レイヤーモード有効化オプション
         self.layer_mode_checkbox = QCheckBox("色レイヤーモードを有効にする")
         self.layer_mode_checkbox.setChecked(False)
-        # 各色ごとの高さ設定用スクロールエリア
+        # レイヤー設定リスト (ドラッグで順序変更可能)
         self.layer_scroll = QScrollArea()
         self.layer_scroll.setWidgetResizable(True)
-        self.layer_scroll_content = QWidget()
-        self.layer_scroll_content_layout = QVBoxLayout(self.layer_scroll_content)
-        self.layer_scroll.setWidget(self.layer_scroll_content)
+        self.layer_list = QListWidget()
+        # 内部移動を有効にし、アイテムをドラッグで並び替え
+        self.layer_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.layer_list.setDefaultDropAction(Qt.MoveAction)
+        self.layer_list.setSelectionMode(QAbstractItemView.NoSelection)
+        # 順序変更時にカラー順序を更新
+        self.layer_list.model().rowsMoved.connect(self.on_layer_reordered)
+        self.layer_scroll.setWidget(self.layer_list)
         # レイアウト設定
         layer_group_layout = QVBoxLayout()
         # レイヤーモード有効化チェック
@@ -3732,20 +3773,8 @@ class DotPlateApp(QMainWindow):
     
     def update_layer_controls(self):
         """Refresh the layer settings controls based on current pixels_rounded_np"""
-        # Clear existing controls (remove all widgets and nested layouts)
-        def clear_layout(layout):
-            # Recursively remove all items from given layout
-            while layout.count():
-                item = layout.takeAt(0)
-                # Remove widget items
-                w = item.widget()
-                if w:
-                    w.deleteLater()
-                # Remove nested layouts
-                nested = item.layout()
-                if nested:
-                    clear_layout(nested)
-        clear_layout(self.layer_scroll_content_layout)
+        # Clear existing layer list
+        self.layer_list.clear()
         # Initialize layer_heights dict if not present
         if not hasattr(self, 'layer_heights'):
             self.layer_heights = {}
@@ -3763,38 +3792,45 @@ class DotPlateApp(QMainWindow):
                     if c not in new_order:
                         new_order.append(c)
                 self.layer_color_order = new_order
-            # Build controls in layer order
+            # Build controls in layer order using drag-and-drop list
             for color in self.layer_color_order:
                 if color not in present:
                     continue
                 # Ensure a default height entry exists
                 default_h = self.layer_heights.get(color, 0.2)
                 self.layer_heights[color] = default_h
+                # Create item widget
+                item_widget = QWidget()
+                row_layout = QHBoxLayout(item_widget)
                 # Thumbnail
                 label = QLabel()
                 pixmap = QPixmap(20, 20)
                 pixmap.fill(QColor(*color))
                 label.setPixmap(pixmap)
+                row_layout.addWidget(label)
                 # Spin box for height
                 spin = QDoubleSpinBox()
                 spin.setRange(0.0, 10.0)
                 spin.setSingleStep(0.1)
                 spin.setValue(default_h)
                 spin.valueChanged.connect(lambda val, c=color: self.layer_heights.__setitem__(c, val))
+                spin.valueChanged.connect(lambda val: self.update_layer_controls())
+                row_layout.addWidget(spin)
                 # Up/Down buttons for ordering
                 up_btn = QPushButton("▲")
                 up_btn.setFixedSize(30, 20)
                 up_btn.clicked.connect(lambda _, c=color: self.move_layer_up(c))
+                row_layout.addWidget(up_btn)
                 down_btn = QPushButton("▼")
                 down_btn.setFixedSize(30, 20)
                 down_btn.clicked.connect(lambda _, c=color: self.move_layer_down(c))
-                # Layout row
-                row = QHBoxLayout()
-                row.addWidget(label)
-                row.addWidget(spin)
-                row.addWidget(up_btn)
-                row.addWidget(down_btn)
-                self.layer_scroll_content_layout.addLayout(row)
+                row_layout.addWidget(down_btn)
+                # Add to drag-and-drop list
+                item = QListWidgetItem(self.layer_list)
+                item.setSizeHint(item_widget.sizeHint())
+                item.setData(Qt.UserRole, color)
+                self.layer_list.addItem(item)
+                self.layer_list.setItemWidget(item, item_widget)
     
     # Layer ordering controls
     def move_layer_up(self, color):
@@ -3839,6 +3875,15 @@ class DotPlateApp(QMainWindow):
             return (mx - mn) / mx if mx != 0 else 0
         self.layer_color_order.sort(key=saturation, reverse=not ascending)
         self.update_layer_controls()
+    
+    def on_layer_reordered(self, parent, start, end, destination, row):
+        """Update layer_color_order after drag-and-drop reordering."""
+        new_order = []
+        for i in range(self.layer_list.count()):
+            item = self.layer_list.item(i)
+            color = item.data(Qt.UserRole)
+            new_order.append(color)
+        self.layer_color_order = new_order
     
     def show_layer_settings_dialog(self):
         """ポップアップウィンドウでレイヤー設定を開く"""
