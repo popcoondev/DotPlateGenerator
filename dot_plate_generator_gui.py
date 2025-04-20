@@ -2686,16 +2686,18 @@ class DotPlateApp(QMainWindow):
                 {"role": "system", "content": "You are a helpful assistant for pixel editing."},
                 {"role": "user", "content": prompt + " ピクセルデータ: " + json.dumps(pixel_list)}
             ]
-            # Use new OpenAI >=1.0.0 interface: chat.completions
+            # 設定されたAPIキーを適用
+            openai.api_key = self.openai_api_key
             try:
-                # New style
-                response = openai.chat.completions.create(
+                # OpenAI Python >=1.0.0: 新クライアントAPIを使用
+                client = openai.OpenAI(api_key=self.openai_api_key)
+                response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=messages,
                     temperature=0
                 )
-            except Exception:
-                # Fallback to old style if supported
+            except AttributeError:
+                # OpenAI Python <1.0.0: 従来のインターフェースにフォールバック
                 response = openai.ChatCompletion.create(
                     model="gpt-3.5-turbo",
                     messages=messages,
