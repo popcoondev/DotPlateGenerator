@@ -1117,7 +1117,15 @@ class DotPlateApp(QMainWindow):
                 self.rubber_band.show()
                 return True
             elif event.type() == QEvent.MouseMove and self.rubber_band.isVisible():
-                rect = QRect(self._trim_origin, event.pos()).normalized()
+                # 四角形を常に縦横比1:1に固定
+                current_pos = event.pos()
+                dx = current_pos.x() - self._trim_origin.x()
+                dy = current_pos.y() - self._trim_origin.y()
+                side = min(abs(dx), abs(dy))
+                # 押下方向を保持
+                dx = side if dx >= 0 else -side
+                dy = side if dy >= 0 else -side
+                rect = QRect(self._trim_origin, QSize(dx, dy)).normalized()
                 self.rubber_band.setGeometry(rect)
                 return True
             elif event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
@@ -1164,6 +1172,15 @@ class DotPlateApp(QMainWindow):
             y0 = int(y_pix * scale_y)
             x1 = int(end_x * scale_x)
             y1 = int(end_y * scale_y)
+            # 画像境界内にクランプ
+            x0 = max(0, min(x0, full_w))
+            y0 = max(0, min(y0, full_h))
+            x1 = max(0, min(x1, full_w))
+            y1 = max(0, min(y1, full_h))
+            # 有効な範囲かチェック
+            if x1 <= x0 or y1 <= y0:
+                QMessageBox.warning(self, "トリムエラー", "選択範囲が小さすぎます。")
+                return
             cropped = img_full.crop((x0, y0, x1, y1))
             suffix = os.path.splitext(self.image_path)[1] or '.png'
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -1973,6 +1990,26 @@ class DotPlateApp(QMainWindow):
         self.layer_popup_button.setToolTip("レイヤー設定を別ウィンドウで開きます")
         self.layer_popup_button.clicked.connect(self.show_layer_settings_dialog)
         layer_group_layout.addWidget(self.layer_popup_button)
+        # レイヤーの色を明度でソート
+        sort_layout = QHBoxLayout()
+        asc_btn = QPushButton("明度昇順")
+        asc_btn.setToolTip("色の明度が低い(暗い)順から高い(明るい)順に並べ替えます")
+        asc_btn.clicked.connect(lambda: self.sort_layers_by_brightness(True))
+        desc_btn = QPushButton("明度降順")
+        desc_btn.setToolTip("色の明度が高い(明るい)順から低い(暗い)順に並べ替えます")
+        desc_btn.clicked.connect(lambda: self.sort_layers_by_brightness(False))
+        sort_layout.addWidget(asc_btn)
+        sort_layout.addWidget(desc_btn)
+        # レイヤーの色を彩度(濃さ)でソート
+        sat_asc_btn = QPushButton("濃さ昇順")
+        sat_asc_btn.setToolTip("色の濃さが低い(淡い)順から高い(濃い)順に並べ替えます")
+        sat_asc_btn.clicked.connect(lambda: self.sort_layers_by_saturation(True))
+        sat_desc_btn = QPushButton("濃さ降順")
+        sat_desc_btn.setToolTip("色の濃さが高い(濃い)順から低い(淡い)順に並べ替えます")
+        sat_desc_btn.clicked.connect(lambda: self.sort_layers_by_saturation(False))
+        sort_layout.addWidget(sat_asc_btn)
+        sort_layout.addWidget(sat_desc_btn)
+        layer_group_layout.addLayout(sort_layout)
         # 各色ごとの高さ設定用スクロール領域
         layer_group_layout.addWidget(self.layer_scroll)
         self.layer_group.setLayout(layer_group_layout)
@@ -3746,10 +3783,10 @@ class DotPlateApp(QMainWindow):
                 spin.valueChanged.connect(lambda val, c=color: self.layer_heights.__setitem__(c, val))
                 # Up/Down buttons for ordering
                 up_btn = QPushButton("▲")
-                up_btn.setFixedSize(20, 20)
+                up_btn.setFixedSize(30, 20)
                 up_btn.clicked.connect(lambda _, c=color: self.move_layer_up(c))
                 down_btn = QPushButton("▼")
-                down_btn.setFixedSize(20, 20)
+                down_btn.setFixedSize(30, 20)
                 down_btn.clicked.connect(lambda _, c=color: self.move_layer_down(c))
                 # Layout row
                 row = QHBoxLayout()
@@ -3778,6 +3815,31 @@ class DotPlateApp(QMainWindow):
                     self.layer_color_order[idx+1], self.layer_color_order[idx])
                 self.update_layer_controls()
     
+    def sort_layers_by_brightness(self, ascending=True):
+        """Sort layer_color_order by perceived brightness (ascending or descending)."""
+        if not hasattr(self, 'layer_color_order'):
+            return
+        # brightness: Y = 0.299R + 0.587G + 0.114B
+        def brightness(c):
+            return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+        # Sort in place
+        self.layer_color_order.sort(key=brightness, reverse=not ascending)
+        self.update_layer_controls()
+    
+    def sort_layers_by_saturation(self, ascending=True):
+        """Sort layer_color_order by color saturation (ascending or descending)."""
+        if not hasattr(self, 'layer_color_order'):
+            return
+        def saturation(c):
+            r, g, b = c
+            # Normalize to [0,1]
+            r, g, b = r / 255.0, g / 255.0, b / 255.0
+            mx = max(r, g, b)
+            mn = min(r, g, b)
+            return (mx - mn) / mx if mx != 0 else 0
+        self.layer_color_order.sort(key=saturation, reverse=not ascending)
+        self.update_layer_controls()
+    
     def show_layer_settings_dialog(self):
         """ポップアップウィンドウでレイヤー設定を開く"""
         dialog = QDialog(self)
@@ -3798,6 +3860,27 @@ class DotPlateApp(QMainWindow):
             self.update_layer_controls()
         refresh_btn.clicked.connect(on_refresh)
         layout.addWidget(refresh_btn)
+        # ポップアップ：レイヤーの色を明度・彩度でソートするボタン
+        sort_popup_layout = QHBoxLayout()
+        # 明度ソート
+        popup_asc_btn = QPushButton("明度昇順")
+        popup_asc_btn.setToolTip("色の明度が低い(暗い)順から高い(明るい)順に並べ替えます")
+        popup_asc_btn.clicked.connect(lambda: [self.sort_layers_by_brightness(True), refresh_content()])
+        popup_desc_btn = QPushButton("明度降順")
+        popup_desc_btn.setToolTip("色の明度が高い(明るい)順から低い(暗い)順に並べ替えます")
+        popup_desc_btn.clicked.connect(lambda: [self.sort_layers_by_brightness(False), refresh_content()])
+        # 彩度(濃さ)ソート
+        popup_sat_asc_btn = QPushButton("濃さ昇順")
+        popup_sat_asc_btn.setToolTip("色の濃さが低い(淡い)順から高い(濃い)順に並べ替えます")
+        popup_sat_asc_btn.clicked.connect(lambda: [self.sort_layers_by_saturation(True), refresh_content()])
+        popup_sat_desc_btn = QPushButton("濃さ降順")
+        popup_sat_desc_btn.setToolTip("色の濃さが高い(濃い)順から低い(淡い)順に並べ替えます")
+        popup_sat_desc_btn.clicked.connect(lambda: [self.sort_layers_by_saturation(False), refresh_content()])
+        sort_popup_layout.addWidget(popup_asc_btn)
+        sort_popup_layout.addWidget(popup_desc_btn)
+        sort_popup_layout.addWidget(popup_sat_asc_btn)
+        sort_popup_layout.addWidget(popup_sat_desc_btn)
+        layout.addLayout(sort_popup_layout)
         # スクロールエリア
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -3839,10 +3922,10 @@ class DotPlateApp(QMainWindow):
                 spin.valueChanged.connect(lambda val: self.update_layer_controls())
                 # 順序移動ボタン
                 up_btn = QPushButton("▲")
-                up_btn.setFixedSize(20, 20)
+                up_btn.setFixedSize(40, 20)
                 up_btn.clicked.connect(lambda _, c=color: [self.move_layer_up(c), refresh_content(), self.update_layer_controls()])
                 down_btn = QPushButton("▼")
-                down_btn.setFixedSize(20, 20)
+                down_btn.setFixedSize(40, 20)
                 down_btn.clicked.connect(lambda _, c=color: [self.move_layer_down(c), refresh_content(), self.update_layer_controls()])
                 # 行レイアウト
                 row = QHBoxLayout()
