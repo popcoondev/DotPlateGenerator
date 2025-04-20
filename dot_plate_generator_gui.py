@@ -773,57 +773,87 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                 }
                 
                 base_blocks.append(block)
-                # 壁の生成（右・下方向の内部壁と外周の左・上境界のみ）
-                # 右壁または右外周壁
-                right_neighbor = mask[y, x+1] if x < grid_size-1 else False
-                if (not right_neighbor) or x == grid_size-1 or (not merge_same_color):
-                    thickness = wall_thickness + (out_thickness if x == grid_size-1 else 0)
+                # 壁の生成
+                # 右方向
+                if x == grid_size - 1:
+                    # 右外周壁
+                    thickness = wall_thickness + out_thickness
                     w = box(extents=[thickness, dot_size, wall_height])
                     pos_x = x0 + dot_size + thickness / 2
                     pos_y = y0 + dot_size / 2
                     w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
                     wall_blocks.append(w)
-                # 下壁または下外周壁
-                bottom_neighbor = mask[y+1, x] if y < grid_size-1 else False
-                if (not bottom_neighbor) or y == grid_size-1 or (not merge_same_color):
-                    thickness = wall_thickness + (out_thickness if y == grid_size-1 else 0)
+                else:
+                    neighbor_mask = mask[y, x+1]
+                    neighbor_color = tuple(pixels_rounded_np[y, x+1]) if neighbor_mask else None
+                    if (not neighbor_mask) or (not merge_same_color) or (merge_same_color and neighbor_color != pixel_color):
+                        # 内部右壁
+                        thickness = wall_thickness
+                        w = box(extents=[thickness, dot_size, wall_height])
+                        pos_x = x0 + dot_size + thickness / 2
+                        pos_y = y0 + dot_size / 2
+                        w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                        wall_blocks.append(w)
+                # 下方向
+                if y == grid_size - 1:
+                    # 下外周壁
+                    thickness = wall_thickness + out_thickness
                     w = box(extents=[dot_size, thickness, wall_height])
                     pos_x = x0 + dot_size / 2
                     pos_y = y0 - thickness / 2
                     w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
                     wall_blocks.append(w)
-                # 左外周壁
+                else:
+                    neighbor_mask = mask[y+1, x]
+                    neighbor_color = tuple(pixels_rounded_np[y+1, x]) if neighbor_mask else None
+                    if (not neighbor_mask) or (not merge_same_color) or (merge_same_color and neighbor_color != pixel_color):
+                        # 内部下壁
+                        thickness = wall_thickness
+                        w = box(extents=[dot_size, thickness, wall_height])
+                        pos_x = x0 + dot_size / 2
+                        pos_y = y0 - thickness / 2
+                        w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                        wall_blocks.append(w)
+                # 左方向
                 if x == 0:
-                    # 外周左壁
+                    # 左外周壁
                     thickness = wall_thickness + out_thickness
                     w = box(extents=[thickness, dot_size, wall_height])
                     pos_x = x0 - thickness / 2
                     pos_y = y0 + dot_size / 2
                     w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
                     wall_blocks.append(w)
-                # 左内部壁（隣接ドットなし）
-                if x > 0 and not mask[y, x-1]:
-                    w = box(extents=[wall_thickness, dot_size, wall_height])
-                    pos_x = x0 - wall_thickness / 2
-                    pos_y = y0 + dot_size / 2
-                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
-                    wall_blocks.append(w)
-                # 上外周壁
+                else:
+                    neighbor_mask = mask[y, x-1]
+                    neighbor_color = tuple(pixels_rounded_np[y, x-1]) if neighbor_mask else None
+                    if (not neighbor_mask) or (not merge_same_color) or (merge_same_color and neighbor_color != pixel_color):
+                        # 内部左壁
+                        thickness = wall_thickness
+                        w = box(extents=[thickness, dot_size, wall_height])
+                        pos_x = x0 - thickness / 2
+                        pos_y = y0 + dot_size / 2
+                        w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                        wall_blocks.append(w)
+                # 上方向
                 if y == 0:
-                    # 外周上壁
+                    # 上外周壁
                     thickness = wall_thickness + out_thickness
                     w = box(extents=[dot_size, thickness, wall_height])
                     pos_x = x0 + dot_size / 2
                     pos_y = y0 + dot_size + thickness / 2
                     w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
                     wall_blocks.append(w)
-                # 上内部壁（隣接ドットなし）
-                if y > 0 and not mask[y-1, x]:
-                    w = box(extents=[dot_size, wall_thickness, wall_height])
-                    pos_x = x0 + dot_size / 2
-                    pos_y = y0 + dot_size + wall_thickness / 2
-                    w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
-                    wall_blocks.append(w)
+                else:
+                    neighbor_mask = mask[y-1, x]
+                    neighbor_color = tuple(pixels_rounded_np[y-1, x]) if neighbor_mask else None
+                    if (not neighbor_mask) or (not merge_same_color) or (merge_same_color and neighbor_color != pixel_color):
+                        # 内部上壁
+                        thickness = wall_thickness
+                        w = box(extents=[dot_size, thickness, wall_height])
+                        pos_x = x0 + dot_size / 2
+                        pos_y = y0 + dot_size + thickness / 2
+                        w.apply_translation([pos_x, pos_y, base_height + wall_height / 2])
+                        wall_blocks.append(w)
     
     # メッシュを作成
     mesh = trimesh.util.concatenate(base_blocks + wall_blocks)
