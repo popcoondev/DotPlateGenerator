@@ -16,11 +16,11 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QVBoxLayout, QHBoxLayout, QSlider, QSpinBox, QGridLayout, QDoubleSpinBox,
     QToolButton, QDialog, QGroupBox, QFrame, QSizePolicy, QToolTip, QMainWindow,
-    QColorDialog, QCheckBox, QComboBox, QMenu, QAction, QMenuBar
+    QColorDialog, QCheckBox, QComboBox, QMenu, QAction, QMenuBar, QRubberBand
 )
 # 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
 from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
-from PyQt5.QtCore import Qt, QSize, QTimer, QPoint, QSettings
+from PyQt5.QtCore import Qt, QSize, QTimer, QPoint, QSettings, QEvent, QRect
 from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor
 from shapely.geometry import Polygon
 from skimage import measure
@@ -1071,6 +1071,11 @@ class DotPlateApp(QMainWindow):
         clear_action = QAction('プレビューをクリア', self)
         clear_action.triggered.connect(self.clear_preview_for_scratch)
         edit_menu.addAction(clear_action)
+        # 画像のトリム（余白自動切り抜き）
+        edit_menu.addSeparator()
+        trim_action = QAction('画像をトリム', self)
+        trim_action.triggered.connect(self.trim_image)
+        edit_menu.addAction(trim_action)
         # 設定メニュー: APIキー設定
         settings_menu = menubar.addMenu('設定')
         api_key_action = QAction('APIキー設定', self)
@@ -1090,6 +1095,70 @@ class DotPlateApp(QMainWindow):
             openai.api_key = key
             self.statusBar().showMessage("APIキーを保存しました")
     
+    def trim_image(self):
+        """トリム範囲選択モードを開始する"""
+        if not hasattr(self, 'image_path') or not self.image_path:
+            QMessageBox.warning(self, "トリムエラー", "画像が開かれていません。")
+            return
+        # マニュアルトリム選択モードを有効化
+        self.trim_selecting = True
+        # ラバーバンドをリセットして非表示
+        self.rubber_band.hide()
+        # クロスカーソルに変更
+        self.original_image_label.setCursor(Qt.CrossCursor)
+        self.statusBar().showMessage("ドラッグでトリミング範囲を選択してください")
+    
+    def eventFilter(self, obj, event):
+        """Original image label 用のトリム操作をキャプチャする"""
+        if obj is getattr(self, 'original_image_label', None) and getattr(self, 'trim_selecting', False):
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._trim_origin = event.pos()
+                self.rubber_band.setGeometry(QRect(self._trim_origin, QSize()))
+                self.rubber_band.show()
+                return True
+            elif event.type() == QEvent.MouseMove and self.rubber_band.isVisible():
+                rect = QRect(self._trim_origin, event.pos()).normalized()
+                self.rubber_band.setGeometry(rect)
+                return True
+            elif event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                self.rubber_band.hide()
+                rect = self.rubber_band.geometry()
+                # トリム選択完了
+                self.trim_selecting = False
+                self.original_image_label.setCursor(Qt.ArrowCursor)
+                self.statusBar().clearMessage()
+                self.crop_to_rect(rect)
+                return True
+        return super().eventFilter(obj, event)
+
+    def crop_to_rect(self, rect):
+        """選択矩形に基づき元画像をクロップし、プレビューを更新する"""
+        try:
+            img_full = Image.open(self.image_path)
+            full_w, full_h = img_full.size
+            pixmap = self.original_image_label.pixmap()
+            disp_w, disp_h = pixmap.width(), pixmap.height()
+            scale_x = full_w / disp_w
+            scale_y = full_h / disp_h
+            x0 = int(rect.x() * scale_x)
+            y0 = int(rect.y() * scale_y)
+            x1 = int((rect.x() + rect.width()) * scale_x)
+            y1 = int((rect.y() + rect.height()) * scale_y)
+            cropped = img_full.crop((x0, y0, x1, y1))
+            suffix = os.path.splitext(self.image_path)[1] or '.png'
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            cropped.save(tmp.name)
+            self.image_path = tmp.name
+            self.input_label.setText(self.image_path)
+            # カスタムピクセルデータをクリアして、新画像でプレビュー再生成
+            if hasattr(self, 'pixels_rounded_np'):
+                self.pixels_rounded_np = None
+            # プレビューを更新
+            self.update_preview()
+            QMessageBox.information(self, "トリム完了", "選択範囲で画像をトリムしました。")
+        except Exception as e:
+            QMessageBox.critical(self, "トリムエラー", f"トリミング処理中にエラーが発生しました: {e}")
+
     def save_project(self):
         """プロジェクトをファイルに保存する"""
         if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
@@ -1589,6 +1658,10 @@ class DotPlateApp(QMainWindow):
         self.original_image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         self.original_scroll.setWidget(self.original_image_label)
+        # Manual trim selection support
+        self.trim_selecting = False
+        self.rubber_band = QRubberBand(QRubberBand.Rectangle, self.original_image_label)
+        self.original_image_label.installEventFilter(self)
         original_layout.addWidget(self.original_scroll)
         original_group.setLayout(original_layout)
         column1_layout.addWidget(original_group)
