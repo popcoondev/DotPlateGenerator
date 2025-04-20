@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 )
 # 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
 from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
-from PyQt5.QtCore import Qt, QSize, QTimer, QPoint
+from PyQt5.QtCore import Qt, QSize, QTimer, QPoint, QSettings
 from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor
 from shapely.geometry import Polygon
 from skimage import measure
@@ -1138,9 +1138,13 @@ class DotPlateApp(QMainWindow):
         # 入力ダイアログでAPIキーを取得
         key, ok = QInputDialog.getText(self, "APIキー設定", "OpenAI APIキーを入力してください:", QLineEdit.Normal, getattr(self, 'openai_api_key', ''))
         if ok and key:
+            # 設定の永続化
+            settings = QSettings("DotPlateGenerator", "DotPlateApp")
+            settings.setValue("openai_api_key", key)
+            # APIキーを適用
             self.openai_api_key = key
             openai.api_key = key
-            self.statusBar().showMessage("APIキーが設定されました")
+            self.statusBar().showMessage("APIキーを保存しました")
     
     def save_project(self):
         """プロジェクトをファイルに保存する"""
@@ -1578,8 +1582,15 @@ class DotPlateApp(QMainWindow):
         
         # メニューバーを作成
         self.create_menu_bar()
-        # 環境変数からOpenAI APIキーを読み込む
+        # 永続化されたAPIキーをQtの設定から読み込む
+        settings = QSettings("DotPlateGenerator", "DotPlateApp")
+        saved_key = settings.value("openai_api_key", "")
         api_key_env = os.getenv("OPENAI_API_KEY")
+        if saved_key and not api_key_env:
+            self.openai_api_key = saved_key
+            openai.api_key = saved_key
+            self.statusBar().showMessage("保存済みのAPIキーを読み込みました")
+        # 環境変数からOpenAI APIキーを読み込む（優先）
         if api_key_env:
             self.openai_api_key = api_key_env
             openai.api_key = api_key_env
@@ -2675,11 +2686,21 @@ class DotPlateApp(QMainWindow):
                 {"role": "system", "content": "You are a helpful assistant for pixel editing."},
                 {"role": "user", "content": prompt + " ピクセルデータ: " + json.dumps(pixel_list)}
             ]
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                temperature=0
-            )
+            # Use new OpenAI >=1.0.0 interface: chat.completions
+            try:
+                # New style
+                response = openai.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    temperature=0
+                )
+            except Exception:
+                # Fallback to old style if supported
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    temperature=0
+                )
             content = response.choices[0].message.content.strip()
             # JSONパース
             try:
