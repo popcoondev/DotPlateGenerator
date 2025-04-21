@@ -1167,12 +1167,13 @@ class DotPlateApp(QMainWindow):
             end_x = min(x_pix + w_pix, disp_w)
             end_y = min(y_pix + h_pix, disp_h)
             # 元画像へのスケーリング
+            # Map display selection to original image coordinates using nearest rounding
             scale_x = full_w / disp_w
             scale_y = full_h / disp_h
-            x0 = int(x_pix * scale_x)
-            y0 = int(y_pix * scale_y)
-            x1 = int(end_x * scale_x)
-            y1 = int(end_y * scale_y)
+            x0 = int(round(x_pix * scale_x))
+            y0 = int(round(y_pix * scale_y))
+            x1 = int(round(end_x * scale_x))
+            y1 = int(round(end_y * scale_y))
             # 画像境界内にクランプ
             x0 = max(0, min(x0, full_w))
             y0 = max(0, min(y0, full_h))
@@ -3288,13 +3289,14 @@ class DotPlateApp(QMainWindow):
                 # アニメーションGIFの場合
                 original_img = original_img.convert('RGBA')  # 透明部分を適切に処理
             
-            # 画像が大きすぎる場合はリサイズ
+            # 画像が大きすぎる場合はリサイズ（BMPは最近傍、その他は高品質リサンプリング）
             max_display_size = 500
             if max(original_img.width, original_img.height) > max_display_size:
-                # アスペクト比を維持しながらリサイズ
                 ratio = max_display_size / max(original_img.width, original_img.height)
                 new_size = (int(original_img.width * ratio), int(original_img.height * ratio))
-                original_img = original_img.resize(new_size, Image.LANCZOS)
+                # BMP画像はドット単位を維持するために最近傍を使用
+                resample_method = Image.NEAREST if self.image_path.lower().endswith('.bmp') else Image.LANCZOS
+                original_img = original_img.resize(new_size, resample_method)
             
             # オリジナル画像をQPixmapに変換して表示
             original_buffer = BytesIO()
