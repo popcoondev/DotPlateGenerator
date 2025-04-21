@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 # 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
 from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
 from PyQt5.QtCore import Qt, QSize, QTimer, QPoint, QSettings, QEvent, QRect
-from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor
+from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor, QIcon
 from shapely.geometry import Polygon
 from skimage import measure
 from scipy.ndimage import binary_fill_holes
@@ -1082,6 +1082,10 @@ class DotPlateApp(QMainWindow):
         api_key_action = QAction('APIキー設定', self)
         api_key_action.triggered.connect(self.show_api_key_dialog)
         settings_menu.addAction(api_key_action)
+        # ユーザー塗料パレット設定
+        palette_action = QAction('パレット設定', self)
+        palette_action.triggered.connect(self.show_palette_settings_dialog)
+        settings_menu.addAction(palette_action)
     
     def show_api_key_dialog(self):
         """OpenAI APIキーを設定するダイアログを表示"""
@@ -1095,6 +1099,134 @@ class DotPlateApp(QMainWindow):
             self.openai_api_key = key
             openai.api_key = key
             self.statusBar().showMessage("APIキーを保存しました")
+    
+    def get_nearest_palette_color(self, color):
+        """登録パレットから最も近い色を返す (R,G,B tuple)"""
+        if not hasattr(self, 'palette_colors') or not self.palette_colors:
+            return None
+        r, g, b = color
+        # Euclidean squared distance
+        best = min(self.palette_colors, key=lambda c: (r-c[0])**2 + (g-c[1])**2 + (b-c[2])**2)
+        return best
+    
+    def get_palette_mix(self, color, max_denominator=3):
+        """Return list of palette colors to mix to approximate target color."""
+        # color: tuple (r,g,b)
+        # palette_colors: list of tuples
+        if not hasattr(self, 'palette_colors') or not self.palette_colors:
+            return []
+        # If exact palette color exists, use it directly
+        if color in self.palette_colors:
+            return [color]
+        r, g, b = color
+        # Single color error
+        best_error = float('inf')
+        best_mix = []
+        best_single = None
+        # one color
+        for c in self.palette_colors:
+            err = (r-c[0])**2 + (g-c[1])**2 + (b-c[2])**2
+            if err < best_error:
+                best_error = err
+                best_single = c
+                best_mix = [c]
+        # two-color mix
+        n = len(self.palette_colors)
+        for i in range(n):
+            ci = self.palette_colors[i]
+            for j in range(i+1, n):
+                cj = self.palette_colors[j]
+                dr = ci[0] - cj[0]
+                dg = ci[1] - cj[1]
+                db = ci[2] - cj[2]
+                denom = dr*dr + dg*dg + db*db
+                if denom == 0:
+                    continue
+                # optimal alpha for ci
+                alpha = ((r-cj[0])*dr + (g-cj[1])*dg + (b-cj[2])*db) / denom
+                alpha = max(0.0, min(1.0, alpha))
+                # mix color
+                mr = alpha*ci[0] + (1-alpha)*cj[0]
+                mg = alpha*ci[1] + (1-alpha)*cj[1]
+                mb = alpha*ci[2] + (1-alpha)*cj[2]
+                err = (r-mr)**2 + (g-mg)**2 + (b-mb)**2
+                if err < best_error:
+                    best_error = err
+                    # determine integer ratio p:q
+                    best_p, best_q, best_pair = 0, 0, (ci, cj)
+                    best_rel = float('inf')
+                    for d in range(2, max_denominator+1):
+                        p = int(round(alpha * d))
+                        q = d - p
+                        if p <= 0 or q <= 0:
+                            continue
+                        rel = abs((p/d) - alpha)
+                        if rel < best_rel:
+                            best_rel = rel
+                            best_p, best_q = p, q
+                    if best_p > 0 and best_q > 0:
+                        best_mix = [ci] * best_p + [cj] * best_q
+                    else:
+                        best_mix = [ci]
+        return best_mix
+    
+    def show_palette_settings_dialog(self):
+        """ユーザー塗料パレット設定ダイアログを表示"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("パレット設定")
+        dialog.resize(300, 400)
+        layout = QVBoxLayout(dialog)
+        # パレットリスト
+        palette_list = QListWidget()
+        palette_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        # 登録済み色を表示
+        for color in self.palette_colors:
+            item = QListWidgetItem(f"RGB{color}")
+            pix = QPixmap(20, 20)
+            pix.fill(QColor(*color))
+            item.setIcon(QIcon(pix))
+            item.setData(Qt.UserRole, color)
+            palette_list.addItem(item)
+        # 追加・削除ボタン
+        btn_layout = QHBoxLayout()
+        add_btn = QPushButton("＋")
+        remove_btn = QPushButton("－")
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(remove_btn)
+        # ボタン動作
+        def add_color():
+            col = QColorDialog.getColor(parent=dialog)
+            if col.isValid():
+                tup = (col.red(), col.green(), col.blue())
+                if tup not in self.palette_colors:
+                    self.palette_colors.append(tup)
+                    new_item = QListWidgetItem(f"RGB{tup}")
+                    pix2 = QPixmap(20, 20)
+                    pix2.fill(col)
+                    new_item.setIcon(QIcon(pix2))
+                    new_item.setData(Qt.UserRole, tup)
+                    palette_list.addItem(new_item)
+                    # 設定保存
+                    settings = QSettings("DotPlateGenerator", "DotPlateApp")
+                    hexs = [f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}" for c in self.palette_colors]
+                    settings.setValue("palette_colors", hexs)
+        def remove_color():
+            row = palette_list.currentRow()
+            if row >= 0:
+                item = palette_list.takeItem(row)
+                color = item.data(Qt.UserRole)
+                if color in self.palette_colors:
+                    self.palette_colors.remove(color)
+                # 設定保存
+                settings = QSettings("DotPlateGenerator", "DotPlateApp")
+                hexs = [f"#{c[0]:02X}{c[1]:02X}{c[2]:02X}" for c in self.palette_colors]
+                settings.setValue("palette_colors", hexs)
+        add_btn.clicked.connect(add_color)
+        remove_btn.clicked.connect(remove_color)
+        # レイアウト組み立て
+        layout.addWidget(palette_list)
+        layout.addLayout(btn_layout)
+        dialog.exec_()
     
     def trim_image(self):
         """トリム範囲選択モードを開始する"""
@@ -1668,6 +1800,20 @@ class DotPlateApp(QMainWindow):
             self.statusBar().showMessage("該当する色のドットは見つかりませんでした")
     def __init__(self):
         super().__init__()
+        # パレット設定の読み込み (ユーザー登録塗料色)
+        settings = QSettings("DotPlateGenerator", "DotPlateApp")
+        saved_palette = settings.value("palette_colors", []) or []
+        # QSettings returns str or list
+        if isinstance(saved_palette, str):
+            saved_palette = [saved_palette]
+        self.palette_colors = []  # 登録塗料色リスト [(r,g,b), ...]
+        for h in saved_palette:
+            try:
+                c = QColor(h)
+                if c.isValid():
+                    self.palette_colors.append((c.red(), c.green(), c.blue()))
+            except:
+                pass
         # Initialize layer settings defaults
         self.layer_heights = {}
         self.layer_color_order = []
@@ -3955,11 +4101,23 @@ class DotPlateApp(QMainWindow):
                 if color == (0, 0, 0):
                     continue
                 h = self.layer_heights.get(color, 0.2)
+                # 行レイアウトとアイテム作成
+                row = QHBoxLayout()
                 # カラーサムネイル
                 label = QLabel()
                 pixmap = QPixmap(20, 20)
                 pixmap.fill(QColor(*color))
                 label.setPixmap(pixmap)
+                row.addWidget(label)
+                # 登録パレットから混色比を表示
+                mix = self.get_palette_mix(color)
+                for mc in mix:
+                    pal_label = QLabel()
+                    pal_pix = QPixmap(14, 14)
+                    pal_pix.fill(QColor(*mc))
+                    pal_label.setPixmap(pal_pix)
+                    pal_label.setToolTip(f"Mix palette: RGB{mc}")
+                    row.addWidget(pal_label)
                 # 高さスピンボックス
                 spin = QDoubleSpinBox()
                 spin.setRange(0.0, 10.0)
@@ -3967,18 +4125,15 @@ class DotPlateApp(QMainWindow):
                 spin.setValue(h)
                 spin.valueChanged.connect(lambda val, c=color: self.layer_heights.__setitem__(c, val))
                 spin.valueChanged.connect(lambda val: self.update_layer_controls())
+                row.addWidget(spin)
                 # 順序移動ボタン
                 up_btn = QPushButton("▲")
-                up_btn.setFixedSize(40, 20)
+                up_btn.setFixedSize(30, 20)
                 up_btn.clicked.connect(lambda _, c=color: [self.move_layer_up(c), refresh_content(), self.update_layer_controls()])
-                down_btn = QPushButton("▼")
-                down_btn.setFixedSize(40, 20)
-                down_btn.clicked.connect(lambda _, c=color: [self.move_layer_down(c), refresh_content(), self.update_layer_controls()])
-                # 行レイアウト
-                row = QHBoxLayout()
-                row.addWidget(label)
-                row.addWidget(spin)
                 row.addWidget(up_btn)
+                down_btn = QPushButton("▼")
+                down_btn.setFixedSize(30, 20)
+                down_btn.clicked.connect(lambda _, c=color: [self.move_layer_down(c), refresh_content(), self.update_layer_controls()])
                 row.addWidget(down_btn)
                 content_layout.addLayout(row)
         # 初期表示
