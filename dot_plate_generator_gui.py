@@ -4035,6 +4035,8 @@ class DotPlateApp(QMainWindow):
     
     def show_layer_settings_dialog(self):
         """ポップアップウィンドウでレイヤー設定を開く"""
+        # Ensure layer order and heights are up-to-date
+        self.update_layer_controls()
         dialog = QDialog(self)
         dialog.setWindowTitle("レイヤー設定 (別ウィンドウ)")
         dialog.resize(400, 500)
