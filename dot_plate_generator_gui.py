@@ -1104,7 +1104,11 @@ class DotPlateApp(QMainWindow):
         """登録パレットから最も近い色を返す (R,G,B tuple)"""
         if not hasattr(self, 'palette_colors') or not self.palette_colors:
             return None
-        r, g, b = color
+        # Cast to Python ints to avoid numpy uint8 wrap-around
+        try:
+            r, g, b = map(int, color)
+        except Exception:
+            r = int(color[0]); g = int(color[1]); b = int(color[2])
         # Euclidean squared distance
         best = min(self.palette_colors, key=lambda c: (r-c[0])**2 + (g-c[1])**2 + (b-c[2])**2)
         return best
@@ -1118,7 +1122,12 @@ class DotPlateApp(QMainWindow):
         # If exact palette color exists, use it directly
         if color in self.palette_colors:
             return [color]
-        r, g, b = color
+        # Ensure we work with Python ints to avoid uint8 overflow during arithmetic
+        try:
+            r, g, b = map(int, color)
+        except Exception:
+            # Fallback: unpack and cast
+            r = int(color[0]); g = int(color[1]); b = int(color[2])
         # Single color error
         best_error = float('inf')
         best_mix = []
@@ -3016,8 +3025,12 @@ class DotPlateApp(QMainWindow):
                 new_pixels = json.loads(content)
             except Exception:
                 new_pixels = ast.literal_eval(content)
-            arr = np.array(new_pixels, dtype=np.uint8)
-            return arr
+            # 安全にnumpy配列化: 一度整数型で読み込み、範囲をクリップしてuint8へ変換
+            arr_int = np.array(new_pixels, dtype=int)
+            # 負値や255超過の値を0-255にクランプ
+            arr_clamped = np.clip(arr_int, 0, 255)
+            arr_uint8 = arr_clamped.astype(np.uint8)
+            return arr_uint8
         except Exception as e:
             QMessageBox.critical(self, "AIブラシエラー", f"AIブラシ処理中にエラーが発生しました: {e}")
             return None
