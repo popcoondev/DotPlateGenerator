@@ -1026,8 +1026,10 @@ class PanelManagerDialog(QDialog):
         layout = QVBoxLayout(self)
         # 管理対象のドックウィジェット
         docks = [
-            ("ファイル／パラメータ", parent.left_dock),
-            ("STL プレビュー", parent.right_dock),
+            ("ファイル操作", parent.file_dock),
+            ("パラメータ設定", parent.param_dock),
+            ("レイヤー設定", parent.layer_dock),
+            ("STL プレビュー", parent.stl_dock),
         ]
         for name, dock in docks:
             cb = QCheckBox(name)
@@ -2179,7 +2181,7 @@ class DotPlateApp(QMainWindow):
         param_group_layout = QVBoxLayout()
         param_group_layout.addWidget(param_scroll)
         self.param_group.setLayout(param_group_layout)
-        column1_layout.addWidget(self.param_group)
+        # 別Dock化のためここにはパラメータ設定を追加しません
         # レイヤー設定パネル
         self.layer_group = QGroupBox("レイヤー設定")
         # レイヤーモード有効化オプション
@@ -2233,7 +2235,7 @@ class DotPlateApp(QMainWindow):
         # 各色ごとの高さ設定用スクロール領域
         layer_group_layout.addWidget(self.layer_scroll)
         self.layer_group.setLayout(layer_group_layout)
-        column1_layout.addWidget(self.layer_group)
+        # 別Dock化のためここにはレイヤー設定を追加しません
         
         # カラム2：ペイント操作、プレビュー、ズームバー
         column2_panel = QWidget()
@@ -2515,30 +2517,52 @@ class DotPlateApp(QMainWindow):
         
         # 中央にペイント＋プレビューをセット
         self.setCentralWidget(column2_panel)
-        # 左パネルをドッキング
-        self.left_dock = QDockWidget("ファイル／パラメータ", self)
-        self.left_dock.setWidget(column1_panel)
-        self.left_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self.left_dock.setObjectName("LeftDock")
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.left_dock)
-        # 右パネルをドッキング
-        self.right_dock = QDockWidget("STL プレビュー", self)
-        self.right_dock.setWidget(column3_panel)
-        self.right_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self.right_dock.setObjectName("RightDock")
-        self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
+        # ファイル操作／画像パネルをドッキング
+        self.file_dock = QDockWidget("ファイル操作", self)
+        self.file_dock.setWidget(column1_panel)
+        self.file_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.file_dock.setObjectName("FileDock")
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.file_dock)
+        # パラメータ設定パネルをドッキング
+        self.param_dock = QDockWidget("パラメータ設定", self)
+        self.param_dock.setWidget(self.param_group)
+        self.param_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.param_dock.setObjectName("ParamDock")
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.param_dock)
+        # レイヤー設定パネルをドッキング
+        self.layer_dock = QDockWidget("レイヤー設定", self)
+        self.layer_dock.setWidget(self.layer_group)
+        self.layer_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.layer_dock.setObjectName("LayerDock")
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.layer_dock)
+        # STLプレビューをドッキング
+        self.stl_dock = QDockWidget("STL プレビュー", self)
+        self.stl_dock.setWidget(column3_panel)
+        self.stl_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.stl_dock.setObjectName("StlDock")
+        self.addDockWidget(Qt.RightDockWidgetArea, self.stl_dock)
         # 「表示」メニューにパネルの表示/ドッキング切替と管理を追加
         view_menu = self.menuBar().addMenu("表示")
-        # 左パネル (ファイル／パラメータ)
-        left_act = QAction("ファイル／パラメータ", self, checkable=True)
-        left_act.setChecked(self.left_dock.isVisible())
-        left_act.toggled.connect(lambda checked, d=self.left_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
-        view_menu.addAction(left_act)
-        # 右パネル (STL プレビュー)
-        right_act = QAction("STL プレビュー", self, checkable=True)
-        right_act.setChecked(self.right_dock.isVisible())
-        right_act.toggled.connect(lambda checked, d=self.right_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
-        view_menu.addAction(right_act)
+        # ファイル操作
+        file_act = QAction("ファイル操作", self, checkable=True)
+        file_act.setChecked(self.file_dock.isVisible())
+        file_act.toggled.connect(lambda checked, d=self.file_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
+        view_menu.addAction(file_act)
+        # パラメータ設定
+        param_act = QAction("パラメータ設定", self, checkable=True)
+        param_act.setChecked(self.param_dock.isVisible())
+        param_act.toggled.connect(lambda checked, d=self.param_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
+        view_menu.addAction(param_act)
+        # レイヤー設定
+        layer_act = QAction("レイヤー設定", self, checkable=True)
+        layer_act.setChecked(self.layer_dock.isVisible())
+        layer_act.toggled.connect(lambda checked, d=self.layer_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
+        view_menu.addAction(layer_act)
+        # STL プレビュー
+        stl_act = QAction("STL プレビュー", self, checkable=True)
+        stl_act.setChecked(self.stl_dock.isVisible())
+        stl_act.toggled.connect(lambda checked, d=self.stl_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
+        view_menu.addAction(stl_act)
         view_menu.addSeparator()
         # パネル管理ダイアログ
         panel_manager_action = QAction("パネル管理...", self)
