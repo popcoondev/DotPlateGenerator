@@ -12,12 +12,14 @@ from collections import Counter
 from scipy.spatial import distance
 import trimesh
 from trimesh.creation import box
+# Qt Widgets
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QListWidget, QListWidgetItem, QVBoxLayout, QHBoxLayout, QSlider, QSpinBox,
     QGridLayout, QDoubleSpinBox, QToolButton, QDialog, QGroupBox, QFrame,
     QSizePolicy, QToolTip, QMainWindow, QColorDialog, QCheckBox, QComboBox,
-    QMenu, QAction, QMenuBar, QRubberBand, QAbstractItemView
+    QMenu, QAction, QMenuBar, QRubberBand, QAbstractItemView, QDockWidget,
+    QDialogButtonBox
 )
 # 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
 from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
@@ -1015,6 +1017,27 @@ class ParameterHelpDialog(QDialog):
 # -------------------------------
 # GUI クラス
 # -------------------------------
+class PanelManagerDialog(QDialog):
+    """各ドッキングパネルの表示/非表示を管理するダイアログ"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("パネル管理")
+        self.setMinimumSize(250, 120)
+        layout = QVBoxLayout(self)
+        # 管理対象のドックウィジェット
+        docks = [
+            ("ファイル／パラメータ", parent.left_dock),
+            ("STL プレビュー", parent.right_dock),
+        ]
+        for name, dock in docks:
+            cb = QCheckBox(name)
+            cb.setChecked(dock.isVisible())
+            cb.toggled.connect(dock.setVisible)
+            layout.addWidget(cb)
+        # 閉じるボタン
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
 class DotPlateApp(QMainWindow):
     # メニューバー作成とプロジェクトファイル操作
     def create_menu_bar(self):
@@ -1862,7 +1885,7 @@ class DotPlateApp(QMainWindow):
         column1_layout = QVBoxLayout(column1_panel)
         
         # ファイル操作グループ
-        file_group = QGroupBox("ファイル操作")
+        self.file_group = QGroupBox("ファイル操作")
         file_layout = QVBoxLayout()
         
         self.input_label = QLabel("画像が選択されていません")
@@ -1881,11 +1904,11 @@ class DotPlateApp(QMainWindow):
         file_layout.addWidget(self.input_label)
         file_layout.addLayout(file_btn_layout)
         
-        file_group.setLayout(file_layout)
-        column1_layout.addWidget(file_group)
+        self.file_group.setLayout(file_layout)
+        column1_layout.addWidget(self.file_group)
         
         # オリジナル画像表示エリア
-        original_group = QGroupBox("オリジナル画像")
+        self.original_group = QGroupBox("オリジナル画像")
         original_layout = QVBoxLayout()
         
         self.original_scroll = QScrollArea()
@@ -1902,11 +1925,11 @@ class DotPlateApp(QMainWindow):
         self.rubber_band = QRubberBand(QRubberBand.Rectangle, self.original_image_label)
         self.original_image_label.installEventFilter(self)
         original_layout.addWidget(self.original_scroll)
-        original_group.setLayout(original_layout)
-        column1_layout.addWidget(original_group)
+        self.original_group.setLayout(original_layout)
+        column1_layout.addWidget(self.original_group)
         
         # パラメータ設定グループ（スクロール対応）
-        param_group = QGroupBox("パラメータ設定")
+        self.param_group = QGroupBox("パラメータ設定")
         param_scroll = QScrollArea()
         param_scroll.setWidgetResizable(True)
         param_scroll_content = QWidget()
@@ -2155,8 +2178,8 @@ class DotPlateApp(QMainWindow):
         
         param_group_layout = QVBoxLayout()
         param_group_layout.addWidget(param_scroll)
-        param_group.setLayout(param_group_layout)
-        column1_layout.addWidget(param_group)
+        self.param_group.setLayout(param_group_layout)
+        column1_layout.addWidget(self.param_group)
         # レイヤー設定パネル
         self.layer_group = QGroupBox("レイヤー設定")
         # レイヤーモード有効化オプション
@@ -2217,7 +2240,7 @@ class DotPlateApp(QMainWindow):
         column2_layout = QVBoxLayout(column2_panel)
         
         # ペイント操作ツールバー
-        paint_tools_group = QGroupBox("ペイントツール")
+        self.paint_tools_group = QGroupBox("ペイントツール")
         paint_tools_layout = QVBoxLayout()
         
         # ドット編集用ツールバー
@@ -2341,8 +2364,8 @@ class DotPlateApp(QMainWindow):
         
         paint_tools_layout.addLayout(edit_toolbar)
         paint_tools_layout.addWidget(info_label)
-        paint_tools_group.setLayout(paint_tools_layout)
-        column2_layout.addWidget(paint_tools_group)
+        self.paint_tools_group.setLayout(paint_tools_layout)
+        column2_layout.addWidget(self.paint_tools_group)
         
         # プレビュー表示エリア
         preview_group = QGroupBox("プレビュー")
@@ -2490,10 +2513,28 @@ class DotPlateApp(QMainWindow):
         stl_preview_group.setLayout(stl_preview_layout)
         column3_layout.addWidget(stl_preview_group)
         
-        # 3つのカラムをメインレイアウトに追加（1と2を優先）
-        main_layout.addWidget(column1_panel, 4)  # カラム1の幅を4
-        main_layout.addWidget(column2_panel, 4)  # カラム2の幅を4
-        main_layout.addWidget(column3_panel, 2)  # カラム3の幅を2（やや狭め）
+        # 中央にペイント＋プレビューをセット
+        self.setCentralWidget(column2_panel)
+        # 左パネルをドッキング
+        self.left_dock = QDockWidget("ファイル／パラメータ", self)
+        self.left_dock.setWidget(column1_panel)
+        self.left_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.left_dock.setObjectName("LeftDock")
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.left_dock)
+        # 右パネルをドッキング
+        self.right_dock = QDockWidget("STL プレビュー", self)
+        self.right_dock.setWidget(column3_panel)
+        self.right_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.right_dock.setObjectName("RightDock")
+        self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
+        # 「表示」メニューにドックのトグルアクションを追加
+        view_menu = self.menuBar().addMenu("表示")
+        view_menu.addAction(self.left_dock.toggleViewAction())
+        view_menu.addAction(self.right_dock.toggleViewAction())
+        view_menu.addSeparator()
+        panel_manager_action = QAction("パネル管理...", self)
+        panel_manager_action.triggered.connect(self.show_panel_manager)
+        view_menu.addAction(panel_manager_action)
         
         self.image_path = None
         self.zoom_factor = 10
@@ -2524,6 +2565,10 @@ class DotPlateApp(QMainWindow):
     def show_parameter_help(self, parameter_name):
         dialog = ParameterHelpDialog(parameter_name, self)
         dialog.exec_()
+    def show_panel_manager(self):
+        """パネル管理ダイアログを表示"""
+        dlg = PanelManagerDialog(self)
+        dlg.exec_()
         
     def set_button_color(self, button, color):
         """ボタンの背景色を設定する"""
