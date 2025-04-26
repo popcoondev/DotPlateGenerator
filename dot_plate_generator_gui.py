@@ -2527,11 +2527,20 @@ class DotPlateApp(QMainWindow):
         self.right_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.right_dock.setObjectName("RightDock")
         self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
-        # 「表示」メニューにドックのトグルアクションを追加
+        # 「表示」メニューにパネルの表示/ドッキング切替と管理を追加
         view_menu = self.menuBar().addMenu("表示")
-        view_menu.addAction(self.left_dock.toggleViewAction())
-        view_menu.addAction(self.right_dock.toggleViewAction())
+        # 左パネル (ファイル／パラメータ)
+        left_act = QAction("ファイル／パラメータ", self, checkable=True)
+        left_act.setChecked(self.left_dock.isVisible())
+        left_act.toggled.connect(lambda checked, d=self.left_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
+        view_menu.addAction(left_act)
+        # 右パネル (STL プレビュー)
+        right_act = QAction("STL プレビュー", self, checkable=True)
+        right_act.setChecked(self.right_dock.isVisible())
+        right_act.toggled.connect(lambda checked, d=self.right_dock: (d.setFloating(False) if checked else None) or d.setVisible(checked))
+        view_menu.addAction(right_act)
         view_menu.addSeparator()
+        # パネル管理ダイアログ
         panel_manager_action = QAction("パネル管理...", self)
         panel_manager_action.triggered.connect(self.show_panel_manager)
         view_menu.addAction(panel_manager_action)
