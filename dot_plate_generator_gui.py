@@ -1912,21 +1912,31 @@ class DotPlateApp(QMainWindow):
         # オリジナル画像表示エリア
         self.original_group = QGroupBox("オリジナル画像")
         original_layout = QVBoxLayout()
-        
+        # スクロール表示
         self.original_scroll = QScrollArea()
         self.original_scroll.setWidgetResizable(True)
         self.original_scroll.setMinimumHeight(250)
-        
         self.original_image_label = QLabel("オリジナル画像が表示されます")
         self.original_image_label.setAlignment(Qt.AlignCenter)
         self.original_image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        
         self.original_scroll.setWidget(self.original_image_label)
         # Manual trim selection support
         self.trim_selecting = False
         self.rubber_band = QRubberBand(QRubberBand.Rectangle, self.original_image_label)
         self.original_image_label.installEventFilter(self)
         original_layout.addWidget(self.original_scroll)
+        # ズームコントロール（スライダー）
+        orig_zoom_layout = QHBoxLayout()
+        orig_zoom_label = QLabel("拡大縮小:")
+        self.original_zoom_slider = QSlider(Qt.Horizontal)
+        self.original_zoom_slider.setMinimum(1)
+        self.original_zoom_slider.setMaximum(40)
+        self.original_zoom_slider.setValue(10)
+        self.original_zoom_slider.setToolTip("オリジナル画像の拡大縮小（スライダーで調整）")
+        self.original_zoom_slider.valueChanged.connect(self.on_original_zoom_changed)
+        orig_zoom_layout.addWidget(orig_zoom_label)
+        orig_zoom_layout.addWidget(self.original_zoom_slider)
+        original_layout.addLayout(orig_zoom_layout)
         self.original_group.setLayout(original_layout)
         column1_layout.addWidget(self.original_group)
         
@@ -2386,7 +2396,8 @@ class DotPlateApp(QMainWindow):
         self.preview_label.clicked.connect(self.on_preview_clicked)
         self.preview_label.hover.connect(self.on_preview_hover)
         self.preview_label.dragPaint.connect(self.on_preview_drag_paint)
-        self.preview_label.mouseWheel.connect(self.on_preview_mouse_wheel)
+        # マウスホイールはズームではなくスクロールで移動
+        # self.preview_label.mouseWheel.connect(self.on_preview_mouse_wheel)
         
         self.preview_scroll.setWidget(self.preview_label)
         preview_layout.addWidget(self.preview_scroll)
@@ -2609,6 +2620,21 @@ class DotPlateApp(QMainWindow):
         """パネル管理ダイアログを表示"""
         dlg = PanelManagerDialog(self)
         dlg.exec_()
+    def on_original_zoom_changed(self, value):
+        """オリジナル画像のズームスライダー変更時"""
+        if hasattr(self, 'original_pixmap_source'):
+            self.applyOriginalZoom()
+
+    def applyOriginalZoom(self):
+        """オリジナル画像に現在のズーム率を適用"""
+        pix = self.original_pixmap_source
+        zoom = self.original_zoom_slider.value()
+        factor = zoom / 10.0
+        w = int(pix.width() * factor)
+        h = int(pix.height() * factor)
+        scaled = pix.scaled(w, h, Qt.KeepAspectRatio)
+        self.original_image_label.setPixmap(scaled)
+        self.original_image_label.adjustSize()
         
     def set_button_color(self, button, color):
         """ボタンの背景色を設定する"""
@@ -3394,6 +3420,12 @@ class DotPlateApp(QMainWindow):
         if path:
             self.image_path = path
             self.input_label.setText(path)
+            # オリジナル画像をロードしてズーム適用
+            try:
+                self.original_pixmap_source = QPixmap(self.image_path)
+                self.applyOriginalZoom()
+            except Exception:
+                pass
             # BMPファイルの場合はグリッドサイズを自動検出
             try:
                 if path.lower().endswith('.bmp'):
@@ -3525,32 +3557,9 @@ class DotPlateApp(QMainWindow):
             # 現在のグリッドサイズを保存
             self.current_grid_size = int(params["Grid Size"])
             
-            # オリジナル画像の表示
-            original_img = Image.open(self.image_path)
-            
-            # GIF画像の場合は最初のフレームを取得
-            if hasattr(original_img, 'format') and original_img.format == 'GIF' and 'duration' in original_img.info:
-                # アニメーションGIFの場合
-                original_img = original_img.convert('RGBA')  # 透明部分を適切に処理
-            
-            # 画像が大きすぎる場合はリサイズ（BMPは最近傍、その他は高品質リサンプリング）
-            max_display_size = 500
-            if max(original_img.width, original_img.height) > max_display_size:
-                ratio = max_display_size / max(original_img.width, original_img.height)
-                new_size = (int(original_img.width * ratio), int(original_img.height * ratio))
-                # BMP画像はドット単位を維持するために最近傍を使用
-                resample_method = Image.NEAREST if self.image_path.lower().endswith('.bmp') else Image.LANCZOS
-                original_img = original_img.resize(new_size, resample_method)
-            
-            # オリジナル画像をQPixmapに変換して表示
-            original_buffer = BytesIO()
-            original_img.save(original_buffer, format="PNG")
-            original_qimg = QImage()
-            original_qimg.loadFromData(original_buffer.getvalue())
-            original_pixmap = QPixmap.fromImage(original_qimg)
-            
-            self.original_image_label.setPixmap(original_pixmap)
-            self.original_image_label.adjustSize()
+            # オリジナル画像はズームスライダーで制御
+            if hasattr(self, 'original_pixmap_source'):
+                self.applyOriginalZoom()
             
             # ペイントモードではハイライト表示しない
             highlight_pos = None
