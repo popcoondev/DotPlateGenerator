@@ -2425,8 +2425,7 @@ class DotPlateApp(QMainWindow):
         self.paint_tools_group = QGroupBox("ペイントツール")
         paint_tools_layout = QVBoxLayout()
         
-        # ドット編集用ツールバー
-        edit_toolbar = QHBoxLayout()
+        # ドット編集用ツールバー（複数行に分割して配置）
         
         # ペイントモード切り替えボタン
         paint_mode_btn = QPushButton("ペン")
@@ -2524,14 +2523,16 @@ class DotPlateApp(QMainWindow):
         brush_size_toolbar.addWidget(self.brush_size_slider)
         brush_size_toolbar.addWidget(self.brush_size_value_label)
         
-        # ツールバーをメインレイアウトに追加
-        edit_toolbar.addLayout(mode_toolbar)
-        edit_toolbar.addLayout(color_toolbar)
-        edit_toolbar.addLayout(brush_size_toolbar)
-        edit_toolbar.addLayout(history_toolbar)
-        
-        
-        paint_tools_layout.addLayout(edit_toolbar)
+        # モード切替行
+        paint_tools_layout.addLayout(mode_toolbar)
+        # カラー選択とブラシサイズ行
+        row_toolbar = QHBoxLayout()
+        row_toolbar.addLayout(color_toolbar)
+        row_toolbar.addSpacing(10)
+        row_toolbar.addLayout(brush_size_toolbar)
+        paint_tools_layout.addLayout(row_toolbar)
+        # 履歴行
+        paint_tools_layout.addLayout(history_toolbar)
         self.paint_tools_group.setLayout(paint_tools_layout)
         column2_layout.addWidget(self.paint_tools_group)
         
