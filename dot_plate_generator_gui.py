@@ -978,6 +978,82 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
     mesh.export(output_path)
     return mesh
 
+def generate_checkerboard_stl(grid_size, dot_size, base_height,
+                              wall_thickness, wall_height, mask=None):
+    """
+    市松模様パターンのSTLを生成します。
+    mask指定で透過マスを除去し、輪郭を検知して側壁を追加します。
+    凸凹の深さは wall_height で、ベース厚みは base_height、
+    側壁の厚みは wall_thickness です。
+    :param grid_size: 1辺あたりのマス数
+    :param dot_size: 各マスのサイズ(mm)
+    :param base_height: ベースプレート厚み(mm)
+    :param wall_thickness: 側壁の厚み(mm)
+    :param wall_height: 凸凹(エンボス/デボス)の高さ(mm)
+    :param mask: 2D boolean配列 (grid_size x grid_size)。False はモデル除去。
+    """
+    import trimesh
+    from trimesh.creation import box
+    import numpy as _np
+
+    cells = []
+    # ベースセルの生成 (mask 指定で各セルごとに生成)
+    for i in range(grid_size):
+        for j in range(grid_size):
+            if mask is not None and not mask[j, i]:
+                continue
+            x0 = i * dot_size
+            y0 = j * dot_size
+            base_cube = box(extents=(dot_size, dot_size, base_height))
+            base_cube.apply_translation((x0 + dot_size/2,
+                                         y0 + dot_size/2,
+                                         base_height/2))
+            cells.append(base_cube)
+    # 輪郭検知: 側壁の追加
+    for i in range(grid_size):
+        for j in range(grid_size):
+            if mask is not None and not mask[j, i]:
+                continue
+            x0 = i * dot_size
+            y0 = j * dot_size
+            for dx, dy, orient in [(-1, 0, 'L'), (1, 0, 'R'), (0, -1, 'B'), (0, 1, 'T')]:
+                ni, nj = i + dx, j + dy
+                neighbor = False
+                if 0 <= ni < grid_size and 0 <= nj < grid_size:
+                    neighbor = mask[nj, ni]
+                if neighbor:
+                    continue
+                # 壁ボックス作成
+                if orient in ('L', 'R'):
+                    w = box(extents=(wall_thickness, dot_size, base_height))
+                    cx = (x0 - wall_thickness/2) if orient == 'L' else (x0 + dot_size + wall_thickness/2)
+                    cy = y0 + dot_size/2
+                else:
+                    w = box(extents=(dot_size, wall_thickness, base_height))
+                    cx = x0 + dot_size/2
+                    cy = (y0 - wall_thickness/2) if orient == 'B' else (y0 + dot_size + wall_thickness/2)
+                w.apply_translation((cx, cy, base_height/2))
+                cells.append(w)
+    # 凸凹パターン (エンボス/デボス)
+    for i in range(grid_size):
+        for j in range(grid_size):
+            if mask is not None and not mask[j, i]:
+                continue
+            x0 = i * dot_size
+            y0 = j * dot_size
+            sign = 1 if (i + j) % 2 == 0 else -1
+            h = abs(wall_height)
+            if sign > 0:
+                zc = base_height + h/2
+            else:
+                zc = base_height - h/2
+            cube = box(extents=(dot_size, dot_size, h))
+            cube.apply_translation((x0 + dot_size/2,
+                                    y0 + dot_size/2,
+                                    zc))
+            cells.append(cube)
+    return trimesh.util.concatenate(cells)
+
 # -------------------------------
 # ヘルプダイアログクラス
 # -------------------------------
@@ -2222,6 +2298,24 @@ class DotPlateApp(QMainWindow):
         param_layout.addLayout(color_algo_layout)
         param_layout.addLayout(wall_color_layout)
         param_layout.addWidget(self.merge_same_color_checkbox)
+        # STL出力モード選択 (ドットプレート or 市松模様)
+        mode_layout = QHBoxLayout()
+        mode_label = QLabel("STL出力モード:")
+        mode_label.setToolTip("出力するSTLの種類を選択")
+        self.stl_mode_combo = QComboBox()
+        self.stl_mode_combo.addItems([
+            "ドットプレート (既存)",
+            "市松模様 (チェックボード)"
+        ])
+        self.stl_mode_combo.setToolTip("STL出力モードを選択")
+        # 選択値を保持
+        self.stl_mode = 0
+        self.stl_mode_combo.currentIndexChanged.connect(
+            lambda idx: setattr(self, 'stl_mode', idx)
+        )
+        mode_layout.addWidget(mode_label)
+        mode_layout.addWidget(self.stl_mode_combo)
+        param_layout.addLayout(mode_layout)
         param_layout.addLayout(self.param_grid)
         param_layout.addStretch()  # 下部に余白を追加
         
@@ -4297,6 +4391,50 @@ class DotPlateApp(QMainWindow):
             self.input_label.setText("画像が選択されていません")
             return
             
+        # パラメータ取得
+        params = {key: spin.value() for key, spin in self.controls.items()}
+        # 市松模様モードの処理: 透過色(黒)を除外し輪郭検知
+        if getattr(self, 'stl_mode', 0) == 1:
+            cb_path, _ = QFileDialog.getSaveFileName(
+                self, "チェックボードSTLを保存", "checkerboard.stl", "STLファイル (*.stl)"
+            )
+            if cb_path:
+                # パラメータ取得
+                grid_size = int(params.get("Grid Size", 0))
+                dot_size = float(params.get("Dot Size", 0.0))
+                base_height = float(params.get("Base Height", 0.0))
+                wall_thickness = float(params.get("Wall Thickness", 0.0))
+                wall_height = float(params.get("Wall Height", 0.0))
+                # マスク生成: 透過PNGならアルファチャンネル、そうでなければ黒色を透過扱い
+                from PIL import Image
+                import numpy as _np
+                img_tmp = Image.open(self.image_path)
+                img_small = img_tmp.resize((grid_size, grid_size), resample=Image.NEAREST)
+                arr = _np.array(img_small)
+                # arr shape: (...,4) for RGBA, (...,3) for RGB
+                # arr shape: (H, W, C) or (H, W). Create mask from transparency (alpha) or non-black/grayscale.
+                if arr.ndim == 3:
+                    if arr.shape[2] == 4:
+                        # RGBA image: alpha > 0 is valid
+                        mask = arr[:, :, 3] > 0
+                    else:
+                        # RGB image: non-black pixels are valid
+                        mask = _np.any(arr[:, :, :3] != 0, axis=2)
+                elif arr.ndim == 2:
+                    # Grayscale image: non-zero pixels are valid
+                    mask = arr != 0
+                else:
+                    # Fallback: treat all as valid
+                    mask = _np.ones(arr.shape[:2], dtype=bool)
+                # チェックボードSTL生成 (輪郭検知付き)
+                mesh = generate_checkerboard_stl(
+                    grid_size, dot_size, base_height,
+                    wall_thickness, wall_height, mask
+                )
+                mesh.export(cb_path)
+                self.input_label.setText(f"{cb_path} に市松模様STLをエクスポートしました")
+            return
+        # 通常モード: ドットプレートSTL出力
         out_path, _ = QFileDialog.getSaveFileName(self, "STLを保存", "dot_plate.stl", "STLファイル (*.stl)")
         if out_path:
             params = {key: spin.value() for key, spin in self.controls.items()}
