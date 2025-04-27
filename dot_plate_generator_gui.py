@@ -4405,27 +4405,30 @@ class DotPlateApp(QMainWindow):
                 base_height = float(params.get("Base Height", 0.0))
                 wall_thickness = float(params.get("Wall Thickness", 0.0))
                 wall_height = float(params.get("Wall Height", 0.0))
-                # マスク生成: 透過PNGならアルファチャンネル、そうでなければ黒色を透過扱い
-                from PIL import Image
-                import numpy as _np
-                img_tmp = Image.open(self.image_path)
-                img_small = img_tmp.resize((grid_size, grid_size), resample=Image.NEAREST)
-                arr = _np.array(img_small)
-                # arr shape: (...,4) for RGBA, (...,3) for RGB
-                # arr shape: (H, W, C) or (H, W). Create mask from transparency (alpha) or non-black/grayscale.
-                if arr.ndim == 3:
-                    if arr.shape[2] == 4:
-                        # RGBA image: alpha > 0 is valid
-                        mask = arr[:, :, 3] > 0
-                    else:
-                        # RGB image: non-black pixels are valid
-                        mask = _np.any(arr[:, :, :3] != 0, axis=2)
-                elif arr.ndim == 2:
-                    # Grayscale image: non-zero pixels are valid
-                    mask = arr != 0
+                # マスク生成: カスタム編集後のピクセルデータがあれば使用し、黒色(0,0,0)を透過扱い。それ以外は元画像からフォールバック。
+                if hasattr(self, 'pixels_rounded_np') and isinstance(self.pixels_rounded_np, np.ndarray):
+                    # 編集・減色後のRGB配列を利用 (shape: H x W x 3)
+                    arr = self.pixels_rounded_np
+                    mask = (arr != 0).any(axis=2)
                 else:
-                    # Fallback: treat all as valid
-                    mask = _np.ones(arr.shape[:2], dtype=bool)
+                    # 元画像からマスク生成 (RGBA or RGB or グレースケール)
+                    from PIL import Image as _Image
+                    import numpy as _np
+                    img_tmp = _Image.open(self.image_path)
+                    img_small = img_tmp.resize((grid_size, grid_size), resample=_Image.NEAREST)
+                    arr = _np.array(img_small)
+                    if arr.ndim == 3 and arr.shape[2] == 4:
+                        # RGBA: alpha > 0 を有効
+                        mask = arr[:, :, 3] > 0
+                    elif arr.ndim == 3:
+                        # RGB: 非黒ピクセルを有効
+                        mask = _np.any(arr[:, :, :3] != 0, axis=2)
+                    elif arr.ndim == 2:
+                        # グレースケール: 非ゼロピクセルを有効
+                        mask = arr != 0
+                    else:
+                        # フォールバック: 全ピクセル有効
+                        mask = _np.ones((grid_size, grid_size), dtype=bool)
                 # チェックボードSTL生成 (輪郭検知付き)
                 mesh = generate_checkerboard_stl(
                     grid_size, dot_size, base_height,
