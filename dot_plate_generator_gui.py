@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QGridLayout, QDoubleSpinBox, QToolButton, QDialog, QGroupBox, QFrame,
     QSizePolicy, QToolTip, QMainWindow, QColorDialog, QCheckBox, QComboBox,
     QMenu, QAction, QMenuBar, QRubberBand, QAbstractItemView, QDockWidget,
-    QDialogButtonBox
+    QDialogButtonBox, QTextBrowser
 )
 # 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
 from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
@@ -1088,6 +1088,34 @@ class ParameterHelpDialog(QDialog):
         layout.addWidget(close_button)
         
         self.setLayout(layout)
+        
+        # end of ParameterHelpDialog
+        
+# -------------------------------
+# HTMLヘルプダイアログ
+# -------------------------------
+class HtmlHelpDialog(QDialog):
+    """HTML形式のヘルプを表示するダイアログ"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ヘルプ")
+        self.setMinimumSize(600, 400)
+        # レイアウト
+        layout = QVBoxLayout(self)
+        # HTMLビューア
+        browser = QTextBrowser()
+        help_path = os.path.join(os.path.dirname(__file__), "help.html")
+        try:
+            with open(help_path, "r", encoding="utf-8") as f:
+                html = f.read()
+            browser.setHtml(html)
+        except Exception:
+            browser.setText("ヘルプファイル(help.html)が見つかりません。")
+        layout.addWidget(browser)
+        # 閉じるボタン
+        btn = QPushButton("閉じる")
+        btn.clicked.connect(self.accept)
+        layout.addWidget(btn)
 
 
 # -------------------------------
@@ -1187,6 +1215,12 @@ class DotPlateApp(QMainWindow):
         palette_action = QAction('パレット設定', self)
         palette_action.triggered.connect(self.show_palette_settings_dialog)
         settings_menu.addAction(palette_action)
+        # ヘルプメニュー: HTML形式のヘルプを表示
+        # ヘルプメニュー: HTML形式のヘルプを表示
+        help_menu = menubar.addMenu('ヘルプ')
+        help_action = QAction('ヘルプ', self)
+        help_action.triggered.connect(self.show_help)
+        help_menu.addAction(help_action)
     
     def show_api_key_dialog(self):
         """OpenAI APIキーを設定するダイアログを表示"""
@@ -1200,6 +1234,11 @@ class DotPlateApp(QMainWindow):
             self.openai_api_key = key
             openai.api_key = key
             self.statusBar().showMessage("APIキーを保存しました")
+    
+    def show_help(self):
+        """HTMLヘルプを表示するダイアログを起動"""
+        dlg = HtmlHelpDialog(self)
+        dlg.exec_()
     
     def get_nearest_palette_color(self, color):
         """登録パレットから最も近い色を返す (R,G,B tuple)"""
@@ -1969,15 +2008,17 @@ class DotPlateApp(QMainWindow):
         self.input_label = QLabel("画像が選択されていません")
         self.input_label.setWordWrap(True)
         
+        # 画像選択ボタンのみを表示（STLエクスポートはパラメータ設定に移動）
         file_btn_layout = QHBoxLayout()
+        # 画像選択ボタン
         self.select_button = QPushButton("画像を選択")
         self.select_button.clicked.connect(self.select_image)
-        
-        self.export_button = QPushButton("STLをエクスポート")
-        self.export_button.clicked.connect(self.export_stl)
-        
         file_btn_layout.addWidget(self.select_button)
-        file_btn_layout.addWidget(self.export_button)
+        # 画像トリムボタン
+        self.trim_button = QPushButton("画像をトリム")
+        self.trim_button.setToolTip("画像をトリム（余白自動切り抜き）")
+        self.trim_button.clicked.connect(self.trim_image)
+        file_btn_layout.addWidget(self.trim_button)
         
         file_layout.addWidget(self.input_label)
         file_layout.addLayout(file_btn_layout)
@@ -2294,6 +2335,11 @@ class DotPlateApp(QMainWindow):
             self.controls[label] = spin
             self.sliders[label] = slider
         
+        # パラメータ設定にSTLエクスポートボタンを追加
+        self.param_export_button = QPushButton("STLをエクスポート")
+        self.param_export_button.clicked.connect(self.export_stl)
+        param_layout.addWidget(self.param_export_button)
+
         # レイアウトに追加
         param_layout.addLayout(color_algo_layout)
         param_layout.addLayout(wall_color_layout)
@@ -2490,22 +2536,8 @@ class DotPlateApp(QMainWindow):
         edit_toolbar.addLayout(brush_size_toolbar)
         edit_toolbar.addLayout(history_toolbar)
         
-        # 操作方法説明用のツールチップ
-        info_label = QLabel("編集方法")
-        info_label.setToolTip(
-            "ドット編集方法:\n"
-            "・ペンモード: クリック・ドラッグでドットを描画\n"
-            "・塗りつぶし: 同じ色のドットをクリックで塗りつぶし\n"
-            "・選択モード: ドットをクリックして色の変更や透明化\n"
-            "・スクロール: ズームイン/アウト\n"
-            "・透明にする: 黒色(0,0,0)として処理されます\n"
-            "・元に戻す/やり直し: 編集履歴の操作が可能です"
-        )
-        info_label.setAlignment(Qt.AlignCenter)
-        info_label.setStyleSheet("color: blue; text-decoration: underline;")
         
         paint_tools_layout.addLayout(edit_toolbar)
-        paint_tools_layout.addWidget(info_label)
         self.paint_tools_group.setLayout(paint_tools_layout)
         column2_layout.addWidget(self.paint_tools_group)
         
