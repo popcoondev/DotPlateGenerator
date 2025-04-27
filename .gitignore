@@ -42,4 +42,5 @@ Thumbs.db
 *.jpeg
 *.dpp
 *.html
+!help.html
 *.3mf

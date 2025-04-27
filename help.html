@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Dot Plate Generator GUI ヘルプ</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; line-height: 1.6; }
+    h1, h2 { color: #333; }
+    ul { margin-left: 1em; }
+    code { background: #f4f4f4; padding: 2px 4px; }
+    a { color: #0066cc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>Dot Plate Generator GUI ヘルプ</h1>
+  <p>このツールは、任意の画像をドット絵に変換し、3Dプリント用のドットプレート（STL）を生成するGUIアプリケーションです。画像のパラメータ調整、カラー編集、AIブラシ、レイヤー設定など、多彩な機能を備えています。</p>
+
+  <h2>目次</h2>
+  <ul>
+    <li><a href="#file">ファイル操作</a></li>
+    <li><a href="#parameters">パラメータ設定</a></li>
+    <li><a href="#edit">編集</a></li>
+    <li><a href="#paint">ペイントツール</a></li>
+    <li><a href="#preview">プレビュー</a></li>
+    <li><a href="#stl">STLプレビュー</a></li>
+    <li><a href="#layers">レイヤー設定</a></li>
+    <li><a href="#settings">設定</a></li>
+    <li><a href="#panel">パネル管理</a></li>
+    <li><a href="#project">プロジェクト管理</a></li>
+    <li><a href="#ai">AIブラシ</a></li>
+    <li><a href="#tips">Tips</a></li>
+  </ul>
+
+  <h2 id="file">ファイル操作</h2>
+  <ul>
+    <li><strong>画像を開く</strong>: PNG/JPEG形式の画像を読み込みます。</li>
+    <li><strong>プロジェクトを開く</strong>: 以前保存したプロジェクト（<code>.dpp</code>）を読み込み、設定・編集データを復元します。</li>
+    <li><strong>プロジェクトを保存</strong>: 現在の編集状態をプロジェクトファイル（<code>.dpp</code>）に保存します。</li>
+    <li><strong>STLファイルを出力</strong>: 設定したパラメータ・カラーに基づいてSTLモデルを生成し、指定の場所に保存します。</li>
+    <li><strong>終了</strong>: アプリケーションを終了します。</li>
+  </ul>
+
+  <h2 id="parameters">パラメータ設定</h2>
+  <p>画像→ドット変換やSTL生成の各種パラメータを設定します。</p>
+  <ul>
+    <li><strong>Grid Size</strong>: ドット変換後のグリッド解像度（縦横ドット数）</li>
+    <li><strong>Dot Size</strong>: 1ドットの物理サイズ（mm）</li>
+    <li><strong>Wall Thickness</strong>: ドット間の凹形状を囲む壁の厚さ（mm）</li>
+    <li><strong>Wall Height</strong>: 壁の高さ（mm）、深い凹みを作成します</li>
+    <li><strong>Base Height</strong>: プレート全体の厚み（mm）</li>
+    <li><strong>Out Thickness</strong>: 外周輪郭を外側に拡張する幅（mm）</li>
+    <li><strong>Color Step</strong>: 色の量子化ステップ値、値を大きくすると使用色数が減少します</li>
+    <li><strong>Top Colors</strong>: 上位何色まで使用するかの制限</li>
+  </ul>
+
+  <h2 id="edit">編集</h2>
+  <ul>
+    <li><strong>元に戻す (Undo)</strong>: 直前の編集操作を取り消します。</li>
+    <li><strong>やり直し (Redo)</strong>: Undo後の操作を再実行します。</li>
+    <li><strong>プレビューをクリア</strong>: ドット編集プレビューを初期状態に戻します。</li>
+    <li><strong>画像をトリム</strong>: 画像の余白を自動切り抜きします。</li>
+  </ul>
+
+  <h2 id="paint">ペイントツール</h2>
+  <p>ドット変換後のプレビュー上でカラー編集が可能です。</p>
+  <ul>
+    <li><strong>ペンモード</strong>: クリック/ドラッグでドットを塗ります。</li>
+    <li><strong>塗潰 (バケツ)</strong>: 同じ色のドットをまとめて置換します。</li>
+    <li><strong>選択モード</strong>: ドットをクリックして色を選択します。</li>
+    <li><strong>AIブラシ</strong>: AIに色を補完/生成して塗る機能（APIキー要）</li>
+    <li><strong>スポイト</strong>: ドットの色を取得してペイント色に設定</li>
+    <li><strong>透明モード</strong>: 黒（0,0,0）として透明化</li>
+    <li><strong>ブラシサイズ</strong>: スライダーでペン/AIブラシのサイズを調整</li>
+    <li><strong>Undo/Redo</strong>: ペイント操作の履歴管理</li>
+  </ul>
+
+  <h2 id="preview">プレビュー</h2>
+  <ul>
+    <li>変換結果のドット絵を表示します。</li>
+    <li><strong>ズームスライダー</strong>で拡大縮小が可能です。</li>
+    <li>クリック/ドラッグでペイント操作ができます。</li>
+    <li>ホバーで色ハイライト（色置換時に便利）</li>
+    <li>マウスホイールでズーム（プレビュー上）</li>
+  </ul>
+
+  <h2 id="stl">STLプレビュー</h2>
+  <ul>
+    <li>生成中または生成後のSTLモデルをインタラクティブに表示します。</li>
+    <li>クリック/ドラッグで回転、ホイールでズーム。</li>
+    <li>カラー情報付きメッシュを確認可能。</li>
+  </ul>
+
+  <h2 id="layers">レイヤー設定</h2>
+  <ul>
+    <li><strong>レイヤーモード</strong>: 色ごとに高さを分けて出力</li>
+    <li><strong>リストドラッグ</strong>: ドラッグ＆ドロップでレイヤーの順序を変更</li>
+    <li>明度/彩度でソート（昇順/降順）</li>
+    <li>手動更新ボタンで最新のドットからレイヤー設定を再生成</li>
+    <li>各レイヤーの高さを個別設定可能</li>
+  </ul>
+
+  <h2 id="settings">設定</h2>
+  <ul>
+    <li><strong>APIキー設定</strong>: OpenAI APIキーを入力してAIブラシを利用</li>
+    <li><strong>パレット設定</strong>: ユーザー定義のカラーパレットを管理</li>
+  </ul>
+
+  <h2 id="panel">パネル管理</h2>
+  <ul>
+    <li>ファイル操作 / パラメータ / レイヤー / STLプレビューの各ドックを表示/非表示切替</li>
+  </ul>
+
+  <h2 id="project">プロジェクト管理</h2>
+  <ul>
+    <li>プロジェクトファイル（<code>.dpp</code>）に以下を保存/復元できます：<br>
+        パラメータ設定、ピクセルデータ（Base64）、編集履歴、レイヤー設定、壁色
+    </li>
+  </ul>
+
+  <h2 id="ai">AIブラシ</h2>
+  <ul>
+    <li>OpenAIのAPIを使い、周辺ドットを参考に補完や着色を行います。</li>
+    <li>使用前に「設定→APIキー設定」でキー入力が必要です。</li>
+    <li>AIブラシモードを選択後、プレビュー上をクリックすると補完塗りが実行されます。</li>
+  </ul>
+
+  <h2 id="tips">Tips</h2>
+  <ul>
+    <li>高解像度（大きいGrid Size）は処理・STL生成に時間がかかります。</li>
+    <li>Color Step/Top Colorsで色数を調整し、処理負荷を軽減できます。</li>
+    <li>画像トリム後にパラメータ調整すると不要ノイズを除去できます。</li>
+    <li>STL出力後、STLビューアでモデルを確認してから印刷設定してください。</li>
+  </ul>
+
+</body>
+</html>
