@@ -1554,9 +1554,6 @@ class DotPlateApp(QMainWindow):
                 latest_history_b64 = base64.b64encode(latest_history_binary).decode('utf-8')
                 project_data['latest_history'] = latest_history_b64
             
-            # 同色マージオプションを保存
-            if hasattr(self, 'merge_same_color_checkbox'):
-                project_data['merge_same_color'] = self.merge_same_color_checkbox.isChecked()
             # レイヤー設定（色ごとの高さと順序）を保存
             if hasattr(self, 'layer_color_order') and hasattr(self, 'layer_heights'):
                 layers = []
@@ -1663,9 +1660,11 @@ class DotPlateApp(QMainWindow):
                     if hasattr(self, 'wall_color_btn'):
                         self.set_button_color(self.wall_color_btn, QColor(r, g, b))
             
-            # 同色マージオプションを復元
-            if 'merge_same_color' in project_data and hasattr(self, 'merge_same_color_checkbox'):
-                self.merge_same_color_checkbox.setChecked(project_data['merge_same_color'])
+            # legacy: 同色マージオプションをSTL出力モードへマッピング
+            if 'merge_same_color' in project_data:
+                # True -> ドットプレート (同色内壁省略)
+                self.stl_mode = 1 if project_data['merge_same_color'] else 0
+                self.stl_mode_combo.setCurrentIndex(self.stl_mode)
             # レイヤー設定を復元 (色ごとの高さと順序)
             if 'layers' in project_data:
                 layers = project_data.get('layers', [])
@@ -1679,9 +1678,9 @@ class DotPlateApp(QMainWindow):
                         color = (int(col[0]), int(col[1]), int(col[2]))
                         self.layer_color_order.append(color)
                         self.layer_heights[color] = float(h)
-                # ensure layer mode checkbox is visible
-                if hasattr(self, 'layer_mode_checkbox'):
-                    self.layer_mode_checkbox.setChecked(True)
+                # プロジェクトにレイヤーデータがあれば色レイヤーモードを選択
+                self.stl_mode = 2
+                self.stl_mode_combo.setCurrentIndex(2)
             
             # 編集履歴を初期化
             self.edit_history = []
@@ -1899,12 +1898,13 @@ class DotPlateApp(QMainWindow):
             color_step = int(params.get("Color Step", 1))
             top_color_limit = int(params.get("Top Colors", 0))
             out_thickness = float(params.get("Out Thickness", 0.0))
-            # 壁色とマージオプション
+            # 壁色とマージオプション (同色内壁省略はSTL出力モードで切り替え)
             if hasattr(self, 'wall_color') and isinstance(self.wall_color, QColor):
                 wall_clr = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
             else:
                 wall_clr = getattr(self, 'wall_color', (255, 255, 255))
-            merge_same = self.merge_same_color_checkbox.isChecked() if hasattr(self, 'merge_same_color_checkbox') else False
+            # STL出力モード(stl_mode==1)で同色間の内壁を省略
+            merge_same = (getattr(self, 'stl_mode', 0) == 1)
             # 一時的なSTL出力ファイル
             with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp_stl_file:
                 stl_path = tmp_stl_file.name
@@ -2103,10 +2103,6 @@ class DotPlateApp(QMainWindow):
         wall_color_layout.addWidget(self.wall_color_button)
         wall_color_layout.addStretch()
         
-        # 同じ色のドット間の内壁を省略するオプション
-        self.merge_same_color_checkbox = QCheckBox("同じ色のドット間の内壁を省略")
-        self.merge_same_color_checkbox.setChecked(False)  # デフォルトはオフ
-        self.merge_same_color_checkbox.setToolTip("このオプションを有効にすると、同じ色のドット同士の間の内壁が作られなくなります。")
         
         # ペイントツール用の変数
         self.current_paint_color = QColor(255, 0, 0)  # デフォルト色：赤
@@ -2343,15 +2339,18 @@ class DotPlateApp(QMainWindow):
         # レイアウトに追加
         param_layout.addLayout(color_algo_layout)
         param_layout.addLayout(wall_color_layout)
-        param_layout.addWidget(self.merge_same_color_checkbox)
+        # 「同色内壁省略」オプションはSTL出力モードで切り替えます
         # STL出力モード選択 (ドットプレート or 市松模様)
         mode_layout = QHBoxLayout()
         mode_label = QLabel("STL出力モード:")
         mode_label.setToolTip("出力するSTLの種類を選択")
         self.stl_mode_combo = QComboBox()
+        # STL出力モード: 0=ドットプレート, 1=ドットプレート (同色内壁省略), 2=チェックボード (市松模様), 3=色レイヤーモード
         self.stl_mode_combo.addItems([
-            "ドットプレート (既存)",
-            "市松模様 (チェックボード)"
+            "ドットプレート",
+            "ドットプレート (同色内壁省略)",
+            "チェックボード (市松模様)",
+            "色レイヤーモード"
         ])
         self.stl_mode_combo.setToolTip("STL出力モードを選択")
         # 選択値を保持
@@ -2375,9 +2374,6 @@ class DotPlateApp(QMainWindow):
         # 別Dock化のためここにはパラメータ設定を追加しません
         # レイヤー設定パネル
         self.layer_group = QGroupBox("レイヤー設定")
-        # レイヤーモード有効化オプション
-        self.layer_mode_checkbox = QCheckBox("色レイヤーモードを有効にする")
-        self.layer_mode_checkbox.setChecked(False)
         # レイヤー設定リスト (ドラッグで順序変更可能)
         self.layer_scroll = QScrollArea()
         self.layer_scroll.setWidgetResizable(True)
@@ -2391,8 +2387,6 @@ class DotPlateApp(QMainWindow):
         self.layer_scroll.setWidget(self.layer_list)
         # レイアウト設定
         layer_group_layout = QVBoxLayout()
-        # レイヤーモード有効化チェック
-        layer_group_layout.addWidget(self.layer_mode_checkbox)
         # レイヤー更新ボタン（手動更新）
         self.layer_refresh_button = QPushButton("レイヤーを更新")
         self.layer_refresh_button.setToolTip("最新のドットデータでレイヤー設定を更新します")
@@ -2487,13 +2481,13 @@ class DotPlateApp(QMainWindow):
         self.transparent_btn.toggled.connect(self.toggle_transparent_paint_color)
         
         # 元に戻す（Undo）ボタン
-        undo_btn = QPushButton("←")
+        undo_btn = QPushButton("元に戻す")
         undo_btn.setToolTip("直前の編集を元に戻す")
         undo_btn.setMinimumWidth(40)  # 最小幅を設定
         undo_btn.clicked.connect(self.undo_edit)
         
         # やり直し（Redo）ボタン
-        redo_btn = QPushButton("→")
+        redo_btn = QPushButton("やり直し")
         redo_btn.setToolTip("元に戻した編集をやり直す")
         redo_btn.setMinimumWidth(40)  # 最小幅を設定
         redo_btn.clicked.connect(self.redo_edit)
@@ -4055,7 +4049,7 @@ class DotPlateApp(QMainWindow):
                     <div class="color-cell" style="background-color: rgb{wall_color};"></div>
                     &nbsp;RGB{wall_color}
                 </td></tr>
-                <tr><td>同色間内壁省略</td><td>{"あり" if self.merge_same_color_checkbox.isChecked() else "なし"}</td></tr>
+                <tr><td>同色間内壁省略</td><td>{"あり" if getattr(self, 'stl_mode', 0) == 1 else "なし"}</td></tr>
             </table>
         </div>
         
@@ -4318,11 +4312,6 @@ class DotPlateApp(QMainWindow):
         dialog.resize(400, 500)
         self.layer_dialog = dialog
         layout = QVBoxLayout(dialog)
-        # レイヤーモードチェックボックス
-        cb = QCheckBox("色レイヤーモードを有効にする")
-        cb.setChecked(self.layer_mode_checkbox.isChecked())
-        cb.toggled.connect(self.layer_mode_checkbox.setChecked)
-        layout.addWidget(cb)
         # 更新ボタン
         refresh_btn = QPushButton("レイヤーを更新")
         refresh_btn.setToolTip("最新のドットデータでレイヤー設定を更新します")
@@ -4426,7 +4415,8 @@ class DotPlateApp(QMainWindow):
         # パラメータ取得
         params = {key: spin.value() for key, spin in self.controls.items()}
         # 市松模様モードの処理: 透過色(黒)を除外し輪郭検知
-        if getattr(self, 'stl_mode', 0) == 1:
+        # STL出力モードで「市松模様 (チェックボード)」は index 2
+        if getattr(self, 'stl_mode', 0) == 2:
             cb_path, _ = QFileDialog.getSaveFileName(
                 self, "チェックボードSTLを保存", "checkerboard.stl", "STLファイル (*.stl)"
             )
@@ -4469,6 +4459,31 @@ class DotPlateApp(QMainWindow):
                 mesh.export(cb_path)
                 self.input_label.setText(f"{cb_path} に市松模様STLをエクスポートしました")
             return
+        # 色レイヤーモードの処理
+        # STL出力モードで「色レイヤーモード」は index 3
+        if getattr(self, 'stl_mode', 0) == 3:
+            layer_path, _ = QFileDialog.getSaveFileName(
+                self, "色レイヤーモードSTLを保存", "layered.stl", "STLファイル (*.stl)"
+            )
+            if layer_path:
+                params = {key: spin.value() for key, spin in self.controls.items()}
+                # 色レイヤーモード：編集済みピクセルデータを使用して積層STLを生成
+                mesh = generate_layered_stl(
+                    self.pixels_rounded_np,
+                    layer_path,
+                    int(params.get("Grid Size", 0)),
+                    float(params.get("Dot Size", 0.0)),
+                    float(params.get("Base Height", 0.0)),
+                    float(params.get("Wall Thickness", 0.0)),
+                    float(params.get("Wall Height", 0.0)),
+                    self.layer_heights,
+                    self.layer_color_order
+                )
+                # プレビューとレポート表示
+                self.show_stl_preview(mesh)
+                _ = self.generate_html_report(layer_path, mesh)
+                self.input_label.setText(f"{layer_path} に色レイヤーモードSTLをエクスポートしました")
+            return
         # 通常モード: ドットプレートSTL出力
         out_path, _ = QFileDialog.getSaveFileName(self, "STLを保存", "dot_plate.stl", "STLファイル (*.stl)")
         if out_path:
@@ -4488,26 +4503,6 @@ class DotPlateApp(QMainWindow):
                 
                 # カスタム編集されたピクセルデータがあるかチェック
                 custom_pixels = self.pixels_rounded_np if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None else None
-                # レイヤーモードが有効なら色ごとに積層生成
-                if hasattr(self, 'layer_mode_checkbox') and self.layer_mode_checkbox.isChecked():
-                    # 色レイヤーモード：編集済みピクセルを使用して積層STLを生成
-                    mesh = generate_layered_stl(
-                        self.pixels_rounded_np,
-                        out_path,
-                        int(params["Grid Size"]),
-                        float(params["Dot Size"]),
-                        float(params["Base Height"]),
-                        float(params["Wall Thickness"]),
-                        float(params["Wall Height"]),
-                        self.layer_heights,
-                        self.layer_color_order
-                    )
-                    # プレビューとレポート生成
-                    preview_mesh = mesh
-                    self.show_stl_preview(preview_mesh)
-                    html_path = self.generate_html_report(out_path, preview_mesh)
-                    self.input_label.setText(f"{out_path} に色レイヤーモードSTLをエクスポートしました")
-                    return
                 
                 # メッシュ生成（メッシュも返すように指定）
                 if custom_pixels is not None:
@@ -4522,8 +4517,8 @@ class DotPlateApp(QMainWindow):
                         custom_img = Image.fromarray(custom_pixels, mode='RGB')
                         custom_img.save(tmp_path)
                     
-                    # 同じ色のドット間の内壁を省略するオプションの状態を取得
-                    merge_same_color = self.merge_same_color_checkbox.isChecked()
+                    # 同色内壁省略オプション (stl_mode == 1で有効)
+                    merge_same_color = (getattr(self, 'stl_mode', 0) == 1)
                     
                     # 生成された一時画像を使用してSTLを生成
                     mesh = generate_dot_plate_stl(
@@ -4546,8 +4541,8 @@ class DotPlateApp(QMainWindow):
                     import os
                     os.unlink(tmp_path)
                 else:
-                    # 同じ色のドット間の内壁を省略するオプションの状態を取得
-                    merge_same_color = self.merge_same_color_checkbox.isChecked()
+                    # 同色内壁省略オプション (stl_mode == 1で有効)
+                    merge_same_color = (getattr(self, 'stl_mode', 0) == 1)
                     
                     # 選択されたアルゴリズムの情報を表示
                     algo_names = {
