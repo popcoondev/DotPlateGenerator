@@ -2081,6 +2081,8 @@ class DotPlateApp(QMainWindow):
                         
                         # 最後にクリックした位置を保存
                         self.last_clicked_pos = grid_pos
+                        # フォーカスを取得してキーボード操作を受け付ける
+                        self.setFocus()
                         # クリックがグリッド内の有効な位置にある場合にシグナルを発信
                         self.clicked.emit(grid_x, grid_y)
             
@@ -2096,6 +2098,45 @@ class DotPlateApp(QMainWindow):
                 zoom_change = 1 if delta > 0 else -1
                 self.mouseWheel.emit(zoom_change)
                 event.accept()
+            
+            def keyPressEvent(self, event):
+                """Spaceでペイント、Shift+矢印キーでカーソル移動"""
+                # Spaceキーで現在のカーソル位置にペイント
+                if event.key() == Qt.Key_Space:
+                    if self.last_clicked_pos is not None:
+                        # クリック相当の動作を発火
+                        self.clicked.emit(self.last_clicked_pos[0], self.last_clicked_pos[1])
+                    event.accept()
+                    return
+                # Shift + 矢印キーでカーソル移動
+                if event.modifiers() & Qt.ShiftModifier:
+                    if self.last_clicked_pos is None or self.grid_size is None:
+                        return
+                    x, y = self.last_clicked_pos
+                    dx = dy = 0
+                    if event.key() == Qt.Key_Up:
+                        dy = -1
+                    elif event.key() == Qt.Key_Down:
+                        dy = 1
+                    elif event.key() == Qt.Key_Left:
+                        dx = -1
+                    elif event.key() == Qt.Key_Right:
+                        dx = 1
+                    else:
+                        super().keyPressEvent(event)
+                        return
+                    # 範囲内にクランプ
+                    new_x = max(0, min(self.grid_size - 1, x + dx))
+                    new_y = max(0, min(self.grid_size - 1, y + dy))
+                    self.last_clicked_pos = (new_x, new_y)
+                    # プレビュー更新（ハイライト表示）
+                    try:
+                        self.window().update_preview()
+                    except Exception:
+                        pass
+                    event.accept()
+                    return
+                super().keyPressEvent(event)
                 
         # パラメータのグリッドレイアウト
         self.param_grid = QGridLayout()
@@ -3561,12 +3602,10 @@ class DotPlateApp(QMainWindow):
             if hasattr(self, 'original_pixmap_source'):
                 self.applyOriginalZoom()
             
-            # ペイントモードではハイライト表示しない
+            # カーソル位置を常にハイライト表示
             highlight_pos = None
-            # 選択モードの場合のみ、最後にクリックされた位置をハイライト表示
-            if not self.is_paint_mode:
-                if hasattr(self.preview_label, 'last_clicked_pos') and self.preview_label.last_clicked_pos is not None:
-                    highlight_pos = self.preview_label.last_clicked_pos
+            if hasattr(self.preview_label, 'last_clicked_pos') and self.preview_label.last_clicked_pos is not None:
+                highlight_pos = self.preview_label.last_clicked_pos
                 
             # ホバー位置の取得（スポイトモード時は明確に表示）
             hover_pos = None
