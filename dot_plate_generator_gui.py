@@ -2481,8 +2481,11 @@ class DotPlateApp(QMainWindow):
         info_scroll = QScrollArea()
         info_scroll.setWidgetResizable(True)
         info_scroll.setFrameShape(QFrame.NoFrame)
-        info_scroll.setMinimumHeight(180)  # やや高めに設定
-        info_scroll.setMaximumHeight(250)  # 最大高さを増やす
+        # スクロール領域を上下左右に拡張可能に設定
+        info_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        info_scroll.setMinimumHeight(180)  # 最小の高さを設定
+        # 最大高さ制限を解除（全体レイアウトに合わせて拡張可）
+        # info_scroll.setMaximumHeight(250)
         info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 横スクロールバーを非表示
         
         # STL情報ラベル（クリック可能なHTML表示）
