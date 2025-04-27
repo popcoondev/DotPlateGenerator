@@ -2258,11 +2258,6 @@ class DotPlateApp(QMainWindow):
         self.layer_refresh_button.setToolTip("最新のドットデータでレイヤー設定を更新します")
         self.layer_refresh_button.clicked.connect(self.update_layer_controls)
         layer_group_layout.addWidget(self.layer_refresh_button)
-        # レイヤー設定を別ウィンドウで開くボタン
-        self.layer_popup_button = QPushButton("別ウィンドウで開く")
-        self.layer_popup_button.setToolTip("レイヤー設定を別ウィンドウで開きます")
-        self.layer_popup_button.clicked.connect(self.show_layer_settings_dialog)
-        layer_group_layout.addWidget(self.layer_popup_button)
         # レイヤーの色を明度でソート
         sort_layout = QHBoxLayout()
         asc_btn = QPushButton("明度昇順")
@@ -4102,6 +4097,15 @@ class DotPlateApp(QMainWindow):
                 pixmap.fill(QColor(*color))
                 label.setPixmap(pixmap)
                 row_layout.addWidget(label)
+                # Show palette mix ratios for this layer color
+                mix = self.get_palette_mix(color)
+                for mc in mix:
+                    pal_label = QLabel()
+                    pal_pix = QPixmap(14, 14)
+                    pal_pix.fill(QColor(*mc))
+                    pal_label.setPixmap(pal_pix)
+                    pal_label.setToolTip(f"Mix palette: RGB{mc}")
+                    row_layout.addWidget(pal_label)
                 # Spin box for height
                 spin = QDoubleSpinBox()
                 spin.setRange(0.0, 10.0)
