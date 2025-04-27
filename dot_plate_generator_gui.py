@@ -2538,6 +2538,10 @@ class DotPlateApp(QMainWindow):
         self.layer_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.layer_dock.setObjectName("LayerDock")
         self.addDockWidget(Qt.LeftDockWidgetArea, self.layer_dock)
+        # タブ化：左側のファイル／パラメータ／レイヤー設定をタブでまとめる
+        self.tabifyDockWidget(self.file_dock, self.param_dock)
+        self.tabifyDockWidget(self.file_dock, self.layer_dock)
+        self.file_dock.raise_()
         # STLプレビューをドッキング
         self.stl_dock = QDockWidget("STL プレビュー", self)
         self.stl_dock.setWidget(column3_panel)
