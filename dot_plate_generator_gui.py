@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
 # 以下のウィジェットを追加インポート（APIキーダイアログ・メッセージボックス用）
 from PyQt5.QtWidgets import QMessageBox, QInputDialog, QLineEdit
 from PyQt5.QtCore import Qt, QSize, QTimer, QPoint, QSettings, QEvent, QRect
-from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor, QIcon
+from PyQt5.QtGui import QPixmap, QImage, QColor, QPainter, QPen, QCursor, QIcon, QMouseEvent
 from shapely.geometry import Polygon
 from skimage import measure
 from scipy.ndimage import binary_fill_holes
@@ -313,20 +313,22 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
         color_algo: 減色アルゴリズム ("simple", "median_cut", "kmeans", "octree")
         highlight_color: ハイライトする色 (r, g, b)形式
     """
-    # 型チェックと値チェック
-    if not isinstance(grid_size, int) or grid_size <= 0:
-        raise ValueError("grid_size must be a positive integer")
-    
+    # グリッド幅と高さを決定
     if custom_pixels is not None:
-        # カスタムピクセルデータが提供されている場合、それを使用
-        # 型チェック: カスタムピクセルがnumpy配列で、適切な形状か確認
+        # カスタムピクセルデータをそのまま使用
         if not isinstance(custom_pixels, np.ndarray) or custom_pixels.ndim != 3 or custom_pixels.shape[2] != 3:
             raise ValueError("custom_pixels must be a 3D numpy array with shape (height, width, 3)")
         pixels_array = custom_pixels
+        grid_h, grid_w = pixels_array.shape[:2]
     else:
         # 画像からピクセルデータを生成
         img = Image.open(image_path).convert("RGB")
-        img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
+        orig_w, orig_h = img.size
+        # grid_size を幅とみなし、高さをアスペクト比から算出
+        grid_w = grid_size
+        grid_h = int(round(grid_w * orig_h / orig_w)) if orig_w > 0 else grid_w
+        grid_h = max(1, grid_h)
+        img_resized = img.resize((grid_w, grid_h), resample=Image.NEAREST)
         pixels = np.array(img_resized).reshape(-1, 3)
         
         # 選択されたアルゴリズムで減色処理
@@ -375,7 +377,7 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
             pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
         
         # 適切な形状のnumpy配列に変換
-        pixels_array = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_size, grid_size, 3))
+        pixels_array = np.array(pixels_rounded, dtype=np.uint8).reshape((grid_h, grid_w, 3))
     
     # 透過色（黒=0,0,0）を特別処理
     # RGBAモードで新しい画像を作成してアルファチャンネルを追加
@@ -392,19 +394,21 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
     
     # 透明部分が見えるように市松模様の背景を作成
     from PIL import ImageDraw
-    checkerboard = Image.new('RGBA', (grid_size * zoom_factor, grid_size * zoom_factor), (255, 255, 255, 255))
+    width_px = grid_w * zoom_factor
+    height_px = grid_h * zoom_factor
+    checkerboard = Image.new('RGBA', (width_px, height_px), (255, 255, 255, 255))
     pattern = Image.new('RGBA', (zoom_factor * 2, zoom_factor * 2), (255, 255, 255, 0))
     draw = ImageDraw.Draw(pattern)
     draw.rectangle((0, 0, zoom_factor, zoom_factor), fill=(200, 200, 200, 255))
     draw.rectangle((zoom_factor, zoom_factor, zoom_factor * 2, zoom_factor * 2), fill=(200, 200, 200, 255))
     
     # 市松模様パターンを繰り返し配置
-    for y in range(0, grid_size * zoom_factor, zoom_factor * 2):
-        for x in range(0, grid_size * zoom_factor, zoom_factor * 2):
+    for y in range(0, height_px, zoom_factor * 2):
+        for x in range(0, width_px, zoom_factor * 2):
             checkerboard.paste(pattern, (x, y), pattern)
     
     # 拡大したプレビュー画像
-    img_preview = img_preview.resize((grid_size * zoom_factor, grid_size * zoom_factor), resample=Image.NEAREST)
+    img_preview = img_preview.resize((width_px, height_px), resample=Image.NEAREST)
     
     # 市松模様の背景と合成
     result = Image.alpha_composite(checkerboard, img_preview)
@@ -413,7 +417,7 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
     def draw_grid_highlight(grid_pos, color, width_factor=10):
         grid_x, grid_y = grid_pos
         # 有効なグリッド位置かチェック
-        if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
+        if 0 <= grid_x < grid_w and 0 <= grid_y < grid_h:
             draw = ImageDraw.Draw(result)
             # ドットの周りに枠線を描画
             x0 = grid_x * zoom_factor
@@ -440,8 +444,8 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
         r, g, b = highlight_color
         # ハイライトに使用する距離の閾値（0-255の色空間）
         threshold = 30
-        for y in range(grid_size):
-            for x in range(grid_size):
+        for y in range(grid_h):
+            for x in range(grid_w):
                 pixel_color = tuple(pixels_array[y, x])
                 # 色空間で近い色を検出
                 if distance.euclidean(pixel_color, (r, g, b)) <= threshold:
@@ -1399,14 +1403,15 @@ class DotPlateApp(QMainWindow):
                 self.rubber_band.show()
                 return True
             elif event.type() == QEvent.MouseMove and self.rubber_band.isVisible():
-                # 四角形を常に縦横比1:1に固定
+                # 自由比率でトリム選択。Shiftキー押下時のみ1:1固定
                 current_pos = event.pos()
                 dx = current_pos.x() - self._trim_origin.x()
                 dy = current_pos.y() - self._trim_origin.y()
-                side = min(abs(dx), abs(dy))
-                # 押下方向を保持
-                dx = side if dx >= 0 else -side
-                dy = side if dy >= 0 else -side
+                # Shiftで正方形固定
+                if isinstance(event, QMouseEvent) and (event.modifiers() & Qt.ShiftModifier):
+                    side = min(abs(dx), abs(dy))
+                    dx = side if dx >= 0 else -side
+                    dy = side if dy >= 0 else -side
                 rect = QRect(self._trim_origin, QSize(dx, dy)).normalized()
                 self.rubber_band.setGeometry(rect)
                 return True
@@ -1470,14 +1475,12 @@ class DotPlateApp(QMainWindow):
             cropped.save(tmp.name)
             self.image_path = tmp.name
             self.input_label.setText(self.image_path)
-            # BMP画像をトリミングした場合は、ドット数に合わせてGrid Sizeを更新
+            # トリミング後の幅に合わせてGrid Sizeを更新
             try:
-                if suffix.lower() == '.bmp' and hasattr(self, 'controls') and 'Grid Size' in self.controls:
-                    # croppedはPIL Imageのまま利用
+                if hasattr(self, 'controls') and 'Grid Size' in self.controls:
                     w_crop, h_crop = cropped.size
-                    grid_size = w_crop if w_crop == h_crop else w_crop
-                    # スピンボックスに反映
-                    self.controls['Grid Size'].setValue(int(grid_size))
+                    # 幅を優先して設定（非正方形時はアスペクト比をプレビューで維持）
+                    self.controls['Grid Size'].setValue(int(w_crop))
             except Exception:
                 pass
             # カスタムピクセルデータをクリアして、新画像でプレビュー再生成
@@ -3583,16 +3586,12 @@ class DotPlateApp(QMainWindow):
                 self.applyOriginalZoom()
             except Exception:
                 pass
-            # BMPファイルの場合はグリッドサイズを自動検出
+            # 画像を読み込んだらグリッド幅を自動検出（幅を優先）
             try:
-                if path.lower().endswith('.bmp'):
-                    img = Image.open(path)
-                    w, h = img.size
-                    # 正方形グリッドを想定し、幅を優先
-                    grid_size = w if w == h else w
-                    # コントロールが存在すれば値を設定（範囲外は自動的にクランプされる）
-                    if hasattr(self, 'controls') and 'Grid Size' in self.controls:
-                        self.controls['Grid Size'].setValue(int(grid_size))
+                img = Image.open(path)
+                w, h = img.size
+                if hasattr(self, 'controls') and 'Grid Size' in self.controls:
+                    self.controls['Grid Size'].setValue(int(w))
             except Exception:
                 # 自動検出失敗時は何もしない
                 pass
@@ -3777,8 +3776,13 @@ class DotPlateApp(QMainWindow):
             if custom_pixels is None:
                 try:
                     # ピクセルデータを保存（後でドット編集時に使用）
-                    img_resized = Image.open(self.image_path).convert("RGB").resize(
-                        (self.current_grid_size, self.current_grid_size), resample=Image.NEAREST)
+                    # 画像を幅 self.current_grid_size、高さはアスペクト比に応じてリサイズ
+                    img_full = Image.open(self.image_path).convert("RGB")
+                    orig_w, orig_h = img_full.size
+                    grid_w = self.current_grid_size
+                    grid_h = int(round(grid_w * orig_h / orig_w)) if orig_w > 0 else grid_w
+                    grid_h = max(1, grid_h)
+                    img_resized = img_full.resize((grid_w, grid_h), resample=Image.NEAREST)
                     pixels = np.array(img_resized).reshape(-1, 3)
                     
                     # 選択されたアルゴリズムで減色処理
@@ -3847,12 +3851,7 @@ class DotPlateApp(QMainWindow):
                     
                     # 適切な形状のnumpy配列に変換
                     pixels_array = np.array(pixels_rounded, dtype=np.uint8)
-                    self.pixels_rounded_np = pixels_array.reshape((self.current_grid_size, self.current_grid_size, 3))
-                    
-                    # デバッグのために型と形状を確認
-                    print(f"生成されたpixels_rounded_np の型: {type(self.pixels_rounded_np)}")
-                    print(f"生成されたpixels_rounded_np の形状: {self.pixels_rounded_np.shape}")
-                        
+                    self.pixels_rounded_np = pixels_array.reshape((grid_h, grid_w, 3))
                     # 初期状態を履歴に追加（元に戻す機能のため）
                     self.edit_history = [self.pixels_rounded_np.copy()]
                     self.history_position = 0
