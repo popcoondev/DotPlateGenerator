@@ -1396,6 +1396,66 @@ class DotPlateApp(QMainWindow):
     
     def eventFilter(self, obj, event):
         """Original image label 用のトリム操作をキャプチャする"""
+        # プレビュー上でのコピー/ペースト矩形選択
+        # コピー/ペースト用の矩形選択エリアをキャプチャ（preview_label またはそのビューポート）
+        if obj is getattr(self, 'preview_label', None) or (hasattr(self, 'preview_scroll') and obj is self.preview_scroll.viewport()):
+            # コピー選択モード
+            if getattr(self, 'is_copy_mode', False):
+                if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                    # 開始点を保存してラバーバンド表示
+                    self._copy_origin = event.pos()
+                    self.preview_rubber_band.setGeometry(QRect(self._copy_origin, QSize()))
+                    self.preview_rubber_band.show()
+                    return True
+                elif event.type() == QEvent.MouseMove and self.preview_rubber_band.isVisible():
+                    # 選択範囲を更新
+                    rect = QRect(self._copy_origin, event.pos()).normalized()
+                    self.preview_rubber_band.setGeometry(rect)
+                    return True
+                elif event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton and self.preview_rubber_band.isVisible():
+                    # 選択確定
+                    rect = self.preview_rubber_band.geometry()
+                    self.preview_rubber_band.hide()
+                    # 開始・終了グリッド座標
+                    p0 = self.preview_label.get_grid_position(rect.topLeft())
+                    p1 = self.preview_label.get_grid_position(rect.bottomRight())
+                    if p0 and p1:
+                        x0, y0 = p0; x1, y1 = p1
+                        x0, x1 = sorted((x0, x1)); y0, y1 = sorted((y0, y1))
+                        # コピーバッファ格納
+                        self.copy_buffer = self.pixels_rounded_np[y0:y1+1, x0:x1+1].copy()
+                        self.statusBar().showMessage(f"コピー: ({x0},{y0}) サイズ {x1-x0+1}x{y1-y0+1}")
+                    else:
+                        QMessageBox.warning(self, "コピーエラー", "範囲選択が無効です。")
+                    # モード解除
+                    self.is_copy_mode = False
+                    self.copy_btn.setChecked(False)
+                    return True
+            # ペーストモード
+            if getattr(self, 'is_paste_mode', False):
+                if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                    # ペースト位置取得
+                    gp = self.preview_label.get_grid_position(event.pos())
+                    if gp and getattr(self, 'copy_buffer', None) is not None:
+                        x, y = gp
+                        h, w = self.copy_buffer.shape[:2]
+                        H, W = self.pixels_rounded_np.shape[:2]
+                        # 範囲クリップ
+                        h2 = min(h, H - y)
+                        w2 = min(w, W - x)
+                        if h2 > 0 and w2 > 0:
+                            self.save_edit_history()
+                            self.pixels_rounded_np[y:y+h2, x:x+w2] = self.copy_buffer[:h2, :w2]
+                            self.update_preview(custom_pixels=self.pixels_rounded_np)
+                            self.statusBar().showMessage(f"ペースト: ({x},{y})")
+                    else:
+                        QMessageBox.warning(self, "ペーストエラー", "ペースト範囲が不正です。")
+                    # モード解除
+                    self.is_paste_mode = False
+                    self.paste_btn.setChecked(False)
+                    return True
+        # ここまでプレビューイベント処理
+        # トリム範囲選択モードをキャプチャ
         if obj is getattr(self, 'original_image_label', None) and getattr(self, 'trim_selecting', False):
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 self._trim_origin = event.pos()
@@ -2520,6 +2580,17 @@ class DotPlateApp(QMainWindow):
         color_toolbar.addWidget(self.color_pick_btn)
         color_toolbar.addWidget(eyedropper_btn)
         color_toolbar.addWidget(self.transparent_btn)
+        # コピー・ペースト機能
+        self.copy_btn = QPushButton("コピー")
+        self.copy_btn.setToolTip("ドラッグで範囲を選択してコピー")
+        self.copy_btn.setCheckable(True)
+        self.copy_btn.clicked.connect(self.start_copy_mode)
+        color_toolbar.addWidget(self.copy_btn)
+        self.paste_btn = QPushButton("ペースト")
+        self.paste_btn.setToolTip("クリック位置を起点にペースト")
+        self.paste_btn.setCheckable(True)
+        self.paste_btn.clicked.connect(self.start_paste_mode)
+        color_toolbar.addWidget(self.paste_btn)
         
         history_toolbar = QHBoxLayout()
         history_toolbar.addWidget(undo_btn)
@@ -2571,6 +2642,11 @@ class DotPlateApp(QMainWindow):
         self.preview_label.clicked.connect(self.on_preview_clicked)
         self.preview_label.hover.connect(self.on_preview_hover)
         self.preview_label.dragPaint.connect(self.on_preview_drag_paint)
+        # プレビュー上の矩形選択を有効化（コピー/ペースト用）
+        self.preview_label.installEventFilter(self)
+        # QScrollArea のビューポートにもイベントフィルタを設定（マウスドラッグ検出用）
+        self.preview_scroll.viewport().installEventFilter(self)
+        self.preview_rubber_band = QRubberBand(QRubberBand.Rectangle, self.preview_label)
         # マウスホイールはズームではなくスクロールで移動
         # self.preview_label.mouseWheel.connect(self.on_preview_mouse_wheel)
         
@@ -3016,6 +3092,38 @@ class DotPlateApp(QMainWindow):
                 self.current_paint_color = QColor(255, 0, 0)
             self.set_button_color(self.color_pick_btn, self.current_paint_color)
             self.statusBar().showMessage("通常モード")
+    
+    def start_copy_mode(self, checked):
+        """コピー操作モードの開始/終了"""
+        self.is_copy_mode = checked
+        if checked:
+            # 他モードを解除
+            self.is_paste_mode = False
+            if hasattr(self, 'paste_btn'):
+                self.paste_btn.setChecked(False)
+            self.statusBar().showMessage("コピー範囲をドラッグで指定してください")
+        else:
+            # キャンセル時はラバーバンドを非表示
+            self.preview_rubber_band.hide()
+            self.statusBar().showMessage("コピーキャンセル")
+    
+    def start_paste_mode(self, checked):
+        """ペースト操作モードの開始/終了"""
+        self.is_paste_mode = checked
+        if checked:
+            # 他モードを解除
+            self.is_copy_mode = False
+            if hasattr(self, 'copy_btn'):
+                self.copy_btn.setChecked(False)
+            # コピー済みバッファ確認
+            if self.copy_buffer is None:
+                QMessageBox.warning(self, "ペーストエラー", "コピー範囲がありません")
+                self.paste_btn.setChecked(False)
+                self.is_paste_mode = False
+            else:
+                self.statusBar().showMessage("ペースト位置をクリックしてください")
+        else:
+            self.statusBar().showMessage("ペーストキャンセル")
     
     def get_pixel_color(self, grid_x, grid_y):
         """指定位置のピクセル色を取得する"""
