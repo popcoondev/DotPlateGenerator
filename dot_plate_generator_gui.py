@@ -1753,7 +1753,8 @@ class DotPlateApp(QMainWindow):
                 int(params["Top Colors"]),
                 self.zoom_factor,
                 custom_pixels=highlighted_pixels,
-                highlight_color=target_color  # ハイライト色を指定
+                highlight_color=target_color,  # ハイライト色を指定
+                transparent_color=(self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
             )
             
             # プレビュー画像を更新（QPixmapに変換）
@@ -1831,8 +1832,9 @@ class DotPlateApp(QMainWindow):
                 self.clear_color_highlight()
         
         def on_set_transparent():
-            # 透明色に置換（黒=0,0,0として扱う）
-            self.replace_all_same_color(target_color, (0, 0, 0))
+            # 透明色に置換（ユーザー設定の透過色として扱う）
+            tc = self.transparent_color
+            self.replace_all_same_color(target_color, (tc.red(), tc.green(), tc.blue()))
             dialog.accept()
             # ハイライトを解除
             self.clear_color_highlight()
@@ -2105,6 +2107,18 @@ class DotPlateApp(QMainWindow):
         wall_color_layout.addWidget(wall_color_label)
         wall_color_layout.addWidget(self.wall_color_button)
         wall_color_layout.addStretch()
+        # 透過色設定
+        transparent_color_layout = QHBoxLayout()
+        transparent_color_label = QLabel("透過色:")
+        self.transparent_color_button = QPushButton()
+        self.transparent_color_button.setFixedSize(30, 30)
+        # デフォルトの透過色は黒
+        self.transparent_color = QColor(0, 0, 0)
+        self.set_button_color(self.transparent_color_button, self.transparent_color)
+        self.transparent_color_button.clicked.connect(self.select_transparent_color)
+        transparent_color_layout.addWidget(transparent_color_label)
+        transparent_color_layout.addWidget(self.transparent_color_button)
+        transparent_color_layout.addStretch()
         
         
         # ペイントツール用の変数
@@ -2342,6 +2356,7 @@ class DotPlateApp(QMainWindow):
         # レイアウトに追加
         param_layout.addLayout(color_algo_layout)
         param_layout.addLayout(wall_color_layout)
+        param_layout.addLayout(transparent_color_layout)
         # 「同色内壁省略」オプションはSTL出力モードで切り替えます
         # STL出力モード選択 (ドットプレート or 市松模様)
         mode_layout = QHBoxLayout()
@@ -2806,6 +2821,19 @@ class DotPlateApp(QMainWindow):
         if color.isValid():
             self.wall_color = color
             self.set_button_color(self.wall_color_button, color)
+    
+    def select_transparent_color(self):
+        """透過色を選択するダイアログを表示"""
+        color = QColorDialog.getColor(self.transparent_color, self, "透過色を選択")
+        if color.isValid():
+            self.transparent_color = color
+            self.set_button_color(self.transparent_color_button, color)
+            # 透明ペイントボタンのツールチップを更新
+            tc = self.transparent_color
+            if hasattr(self, 'transparent_btn'):
+                self.transparent_btn.setToolTip(f"透明モード: RGB({tc.red()},{tc.green()},{tc.blue()}) で描画")
+            # プレビュー更新
+            self.update_preview()
             
     def on_preview_hover(self, grid_x, grid_y):
         """ドット上をマウスがホバーした時の処理"""
@@ -2820,8 +2848,9 @@ class DotPlateApp(QMainWindow):
         try:
             # ホバー位置のドットの色を取得 - numpy配列は[y, x]の順
             current_color = self.pixels_rounded_np[array_y, array_x]
-            is_transparent = tuple(current_color) == (0, 0, 0)
-            
+            # 透明色と比較
+            tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
+            is_transparent = tuple(current_color) == tc
             # ステータス表示文字列
             color_str = "透明" if is_transparent else f"RGB({current_color[0]}, {current_color[1]}, {current_color[2]})"
             self.statusBar().showMessage(f"位置(x,y): [{grid_x}, {grid_y}] → 配列位置[行,列]=[{array_y}, {array_x}] 色: {color_str}")
@@ -2972,11 +3001,13 @@ class DotPlateApp(QMainWindow):
     def toggle_transparent_paint_color(self, checked):
         """透明色（黒=0,0,0）のトグル"""
         if checked:
-            # 現在の色を保存して透明に切り替え
+            # 現在の色を保存して透明色に切り替え
             self.prev_paint_color = self.current_paint_color
-            self.current_paint_color = QColor(0, 0, 0)
+            # 透明色はユーザー設定の透過色
+            tc = self.transparent_color
+            self.current_paint_color = QColor(tc.red(), tc.green(), tc.blue())
             self.set_button_color(self.color_pick_btn, self.current_paint_color)
-            self.statusBar().showMessage("透明モード: 黒色(0,0,0)で描画")
+            self.statusBar().showMessage(f"透明モード: RGB({tc.red()},{tc.green()},{tc.blue()}) で描画")
         else:
             # 前の色に戻す（保存されていなければデフォルト赤）
             if hasattr(self, 'prev_paint_color'):
@@ -3424,8 +3455,9 @@ class DotPlateApp(QMainWindow):
         array_x = grid_x
         
         try:
-            # 透過色を黒（0,0,0）として扱う
-            self.pixels_rounded_np[array_y, array_x] = [0, 0, 0]
+            # 透過色をユーザー設定の透過色で扱う
+            tc = self.transparent_color
+            self.pixels_rounded_np[array_y, array_x] = [tc.red(), tc.green(), tc.blue()]
             
             # プレビューを更新
             self.update_preview(custom_pixels=self.pixels_rounded_np)
@@ -3455,8 +3487,9 @@ class DotPlateApp(QMainWindow):
         print(f"透明化: クリック位置(x,y)=({grid_x}, {grid_y}) → 配列アクセス[y,x]=[{array_y}, {array_x}]")
             
         try:
-            # 透過色を黒（0,0,0）として扱う
-            self.pixels_rounded_np[array_y, array_x] = [0, 0, 0]
+            # 透過色をユーザー設定の透過色で扱う
+            tc = self.transparent_color
+            self.pixels_rounded_np[array_y, array_x] = [tc.red(), tc.green(), tc.blue()]
             
             # プレビューを更新
             self.update_preview(custom_pixels=self.pixels_rounded_np)
