@@ -1794,44 +1794,10 @@ class DotPlateApp(QMainWindow):
         if self.pixels_rounded_np is None:
             return
             
-        # 現在のパラメータ取得
-        params = {key: spin.value() for key, spin in self.controls.items()}
-        
-        # ハイライト表示用の一時的なピクセルデータを作成
-        highlighted_pixels = self.pixels_rounded_np.copy()
-        r, g, b = target_color
-        
         # ハイライトする色を保存
         self.highlighted_color = target_color
-        
-        try:
-            # プレビュー更新（ハイライト表示）
-            preview_img = generate_preview_image(
-                self.image_path,
-                self.current_grid_size,
-                int(params["Color Step"]),
-                int(params["Top Colors"]),
-                self.zoom_factor,
-                custom_pixels=highlighted_pixels,
-                highlight_color=target_color,  # ハイライト色を指定
-                transparent_color=(self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
-            )
-            
-            # プレビュー画像を更新（QPixmapに変換）
-            preview_buffer = BytesIO()
-            preview_img.save(preview_buffer, format="PNG")
-            preview_qimg = QImage()
-            preview_qimg.loadFromData(preview_buffer.getvalue())
-            preview_pixmap = QPixmap.fromImage(preview_qimg)
-            
-            # ラベルに表示
-            self.preview_label.setPixmap(preview_pixmap)
-            
-            # ハイライトはダイアログが閉じるまで維持するので、タイマーは使わない
-            # self.highlight_timer.start(1000)
-            
-        except Exception as e:
-            print(f"ハイライト表示エラー: {str(e)}")
+        # プレビューを更新して該当色をハイライト表示
+        self.update_preview(custom_pixels=self.pixels_rounded_np, highlight_color=target_color)
     
     def clear_color_highlight(self):
         """色のハイライト表示をクリアする"""
