@@ -1058,6 +1058,152 @@ def generate_checkerboard_stl(grid_size, dot_size, base_height,
             cells.append(cube)
     return trimesh.util.concatenate(cells)
 
+def generate_layer_stack_stl(pixels_rounded_np, output_base_path, grid_size, dot_size, 
+                            wall_thickness, wall_height, base_height, out_thickness,
+                            layer_color_order, layer_heights):
+    """
+    レイヤースタックモード用のSTL生成
+    各レイヤーを個別のSTLファイルとして出力
+    
+    レイヤー構造：
+    - 全レイヤーのベース高さ = base_height（統一）
+    - レイヤー1: ビル高さ = wall_height
+    - レイヤー2: ビル高さ = wall_height - base_height × 1  
+    - レイヤーn: ビル高さ = wall_height - base_height × (n-1)
+    - 重ね合わせ後の最終ビル高さ = base_height + wall_height（統一）
+    - 下位レイヤーのビル部分は上位レイヤーで貫通穴として処理
+    - CSGを使わず、セル単位での構築による安定した処理
+    """
+    import trimesh
+    from trimesh.creation import box
+    import numpy as np
+    import os
+    
+    if len(layer_color_order) == 0:
+        return []
+    
+    generated_meshes = []
+    
+    # 各レイヤーのマスクを事前計算
+    layer_masks = {}
+    for layer_idx, color in enumerate(layer_color_order):
+        color_arr = np.array(color, dtype=np.uint8)
+        layer_masks[layer_idx] = np.all(pixels_rounded_np == color_arr, axis=2)
+    
+    # 各レイヤーを処理
+    for layer_idx, color in enumerate(layer_color_order):
+        layer_num = layer_idx + 1  # レイヤー番号は1から開始
+        
+        print(f"\nレイヤー{layer_num}処理開始 - 色: RGB{color}")
+        
+        # レイヤーのベース高さとビル高さを計算
+        layer_base_height = base_height  # 全レイヤー共通
+        layer_building_height = max(wall_height - base_height * (layer_num - 1), wall_height / 3)
+        
+        print(f"ベース高さ: {layer_base_height}")
+        print(f"ビル高さ: {layer_building_height}")
+        
+        # 上位レイヤーの穴位置を計算（このレイヤーより上位の色）
+        upper_layer_holes = set()
+        current_layer_positions = set()
+        non_building_positions = set()
+        
+        for y in range(grid_size):
+            for x in range(grid_size):
+                dot_center_x = x * dot_size + dot_size / 2
+                dot_center_y = (grid_size - 1 - y) * dot_size + dot_size / 2
+                
+                # このレイヤーのビル位置かチェック
+                if layer_masks[layer_idx][y, x]:
+                    current_layer_positions.add((dot_center_x, dot_center_y))
+                    continue
+                
+                # 上位レイヤー（layer_idx+1以降）のビル位置かチェック
+                is_upper_layer = False
+                for upper_idx in range(layer_idx + 1, len(layer_color_order)):
+                    if layer_masks[upper_idx][y, x]:
+                        upper_layer_holes.add((dot_center_x, dot_center_y))
+                        is_upper_layer = True
+                        break
+                
+                # どのレイヤーのビルでもない場合は空洞化対象
+                if not is_upper_layer:
+                    non_building_positions.add((dot_center_x, dot_center_y))
+        
+        print(f"  上位レイヤー穴: {len(upper_layer_holes)}個")
+        print(f"  ビル建設位置: {len(current_layer_positions)}個")  
+        print(f"  空洞化位置: {len(non_building_positions)}個")
+        
+        # 全体サイズ計算
+        total_size = grid_size * dot_size + 2 * out_thickness
+        
+        # ベースプレートをグリッド単位で構築（穴と空洞を除く）
+        layer_blocks = []
+        
+        # 外周部分のベースプレート
+        # 左側
+        left_block = box(extents=[out_thickness, total_size, layer_base_height])
+        left_block.apply_translation([-out_thickness/2, (total_size)/2 - out_thickness, layer_base_height/2])
+        layer_blocks.append(left_block)
+        
+        # 右側  
+        right_block = box(extents=[out_thickness, total_size, layer_base_height])
+        right_block.apply_translation([grid_size * dot_size + out_thickness/2, (total_size)/2 - out_thickness, layer_base_height/2])
+        layer_blocks.append(right_block)
+        
+        # 上側
+        top_block = box(extents=[grid_size * dot_size, out_thickness, layer_base_height])
+        top_block.apply_translation([(grid_size * dot_size)/2, -out_thickness/2, layer_base_height/2])
+        layer_blocks.append(top_block)
+        
+        # 下側
+        bottom_block = box(extents=[grid_size * dot_size, out_thickness, layer_base_height])
+        bottom_block.apply_translation([(grid_size * dot_size)/2, grid_size * dot_size + out_thickness/2, layer_base_height/2])
+        layer_blocks.append(bottom_block)
+        
+        # グリッド内のベースプレート（必要な部分のみ）
+        for y in range(grid_size):
+            for x in range(grid_size):
+                dot_center_x = x * dot_size + dot_size / 2
+                dot_center_y = (grid_size - 1 - y) * dot_size + dot_size / 2
+                
+                # 上位レイヤーの穴でも空洞化位置でもない場合のみベースプレートを作成
+                if (dot_center_x, dot_center_y) not in upper_layer_holes and (dot_center_x, dot_center_y) not in non_building_positions:
+                    base_cell = box(extents=[dot_size, dot_size, layer_base_height])
+                    base_cell.apply_translation([dot_center_x, dot_center_y, layer_base_height/2])
+                    layer_blocks.append(base_cell)
+        
+        # ビル建設（このレイヤーの色の位置のみ）
+        for y in range(grid_size):
+            for x in range(grid_size):
+                if layer_masks[layer_idx][y, x]:
+                    # ドットの中心座標計算
+                    dot_center_x = x * dot_size + dot_size / 2
+                    dot_center_y = (grid_size - 1 - y) * dot_size + dot_size / 2
+                    
+                    # ビル部分を (dot_size - wall_thickness) × (dot_size - wall_thickness) × layer_building_height で作成
+                    building_size = dot_size - wall_thickness
+                    building_block = box(extents=[building_size, building_size, layer_building_height])
+                    building_z = layer_base_height + layer_building_height / 2
+                    building_block.apply_translation([dot_center_x, dot_center_y, building_z])
+                    layer_blocks.append(building_block)
+        
+        # レイヤーメッシュを統合してファイル出力
+        if layer_blocks:
+            try:
+                layer_mesh = trimesh.util.concatenate(layer_blocks)
+                layer_filename = f"{output_base_path}_layer_{layer_num:02d}_{color[0]:03d}_{color[1]:03d}_{color[2]:03d}.stl"
+                layer_mesh.export(layer_filename)
+                generated_meshes.append(layer_mesh)
+                print(f"レイヤー {layer_num} (色: RGB{color}) を {layer_filename} に出力しました")
+                print(f"頂点数: {len(layer_mesh.vertices)}, 面数: {len(layer_mesh.faces)}")
+                print(f"バウンディングボックス: {layer_mesh.bounds}")
+            except Exception as e:
+                print(f"レイヤー {layer_num} のメッシュ生成エラー: {str(e)}")
+                continue
+    
+    return generated_meshes
+
 # -------------------------------
 # ヘルプダイアログクラス
 # -------------------------------
@@ -2389,12 +2535,13 @@ class DotPlateApp(QMainWindow):
         mode_label = QLabel("STL出力モード:")
         mode_label.setToolTip("出力するSTLの種類を選択")
         self.stl_mode_combo = QComboBox()
-        # STL出力モード: 0=ドットプレート, 1=ドットプレート (同色内壁省略), 2=チェックボード (市松模様), 3=色レイヤーモード
+        # STL出力モード: 0=ドットプレート, 1=ドットプレート (同色内壁省略), 2=チェックボード (市松模様), 3=色レイヤーモード, 4=レイヤースタックモード
         self.stl_mode_combo.addItems([
             "ドットプレート",
             "ドットプレート (同色内壁省略)",
             "チェックボード (市松模様)",
-            "色レイヤーモード"
+            "色レイヤーモード",
+            "レイヤースタックモード"
         ])
         self.stl_mode_combo.setToolTip("STL出力モードを選択")
         # 選択値を保持
@@ -4590,6 +4737,66 @@ class DotPlateApp(QMainWindow):
                 self.show_stl_preview(mesh)
                 _ = self.generate_html_report(layer_path, mesh)
                 self.input_label.setText(f"{layer_path} に色レイヤーモードSTLをエクスポートしました")
+            return
+        
+        # レイヤースタックモードの処理
+        if getattr(self, 'stl_mode', 0) == 4:
+            import os
+            stack_path, _ = QFileDialog.getSaveFileName(
+                self, "レイヤースタックSTLを保存（ベースファイル名）", "layer_stack", "STLファイル (*.stl)"
+            )
+            if stack_path:
+                base_path = os.path.splitext(stack_path)[0]
+                params = {key: spin.value() for key, spin in self.controls.items()}
+                
+                # 前提条件チェック
+                if not hasattr(self, 'layer_color_order') or not self.layer_color_order:
+                    QMessageBox.warning(self, "レイヤー設定エラー", "レイヤー設定が見つかりません。先にレイヤー設定を行ってください。")
+                    return
+                
+                if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+                    QMessageBox.warning(self, "ピクセルデータエラー", "編集可能なピクセルデータがありません。先に画像を読み込んでプレビューを生成してください。")
+                    return
+                
+                try:
+                    self.input_label.setText("レイヤースタックSTLファイルを生成中...")
+                    QApplication.processEvents()
+                    
+                    # レイヤースタック用STL生成
+                    meshes = generate_layer_stack_stl(
+                        self.pixels_rounded_np,
+                        base_path,
+                        int(params.get("Grid Size", 0)),
+                        float(params.get("Dot Size", 0.0)),
+                        float(params.get("Wall Thickness", 0.0)),
+                        float(params.get("Wall Height", 0.0)),
+                        float(params.get("Base Height", 0.0)),
+                        float(params.get("Out Thickness", 0.0)),
+                        self.layer_color_order,
+                        getattr(self, 'layer_heights', {})
+                    )
+                    
+                    if meshes:
+                        # 最初のレイヤーをプレビュー表示
+                        self.show_stl_preview(meshes[0])
+                        
+                        # HTMLレポート生成
+                        first_layer_path = f"{base_path}_layer_01_{self.layer_color_order[0][0]:03d}_{self.layer_color_order[0][1]:03d}_{self.layer_color_order[0][2]:03d}.stl"
+                        html_path = self.generate_html_report(first_layer_path, meshes[0])
+                        
+                        layer_count = len(meshes)
+                        message = f"{layer_count}個のレイヤースタックSTLを {base_path}_layer_XX.stl として出力しました"
+                        if html_path:
+                            message += f"、HTMLレポート {html_path} も生成しました"
+                        self.input_label.setText(message)
+                    else:
+                        self.input_label.setText("レイヤースタックSTLの生成に失敗しました")
+                        
+                except Exception as e:
+                    print(f"レイヤースタックSTL生成エラー: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    self.input_label.setText(f"レイヤースタックSTL生成エラー: {str(e)}")
             return
         # 通常モード: ドットプレートSTL出力
         out_path, _ = QFileDialog.getSaveFileName(self, "STLを保存", "dot_plate.stl", "STLファイル (*.stl)")
