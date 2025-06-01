@@ -53,8 +53,8 @@ def create_layer_building(layer_num, target_value):
     print(f"ビル高さ: {layer_building_height}")
     print(f"配列:\n{data}")
     
-    # 全体のサイズ計算
-    total_size = grid_size * dot_size + 2 * out_thickness
+    # 全体のサイズ計算（外周縁取りなし）
+    total_size = grid_size * dot_size
     print(f"全体サイズ: {total_size} x {total_size}")
     
     print(f"ベースプレート全体サイズ: ({total_size}, {total_size}, {base_height})")
@@ -85,28 +85,8 @@ def create_layer_building(layer_num, target_value):
     print(f"  空洞化位置: {len(non_building_positions)}個")
     
     # ベースプレートをグリッド単位で構築（穴と空洞を除く）
+    # 外周の縁取りは不要なので削除
     layer_blocks = []
-    
-    # 外周部分のベースプレート
-    # 左側
-    left_block = box(extents=[out_thickness, total_size, base_height])
-    left_block.apply_translation([-out_thickness/2, (total_size)/2 - out_thickness, base_height/2])
-    layer_blocks.append(left_block)
-    
-    # 右側  
-    right_block = box(extents=[out_thickness, total_size, base_height])
-    right_block.apply_translation([grid_size * dot_size + out_thickness/2, (total_size)/2 - out_thickness, base_height/2])
-    layer_blocks.append(right_block)
-    
-    # 上側
-    top_block = box(extents=[grid_size * dot_size, out_thickness, base_height])
-    top_block.apply_translation([(grid_size * dot_size)/2, -out_thickness/2, base_height/2])
-    layer_blocks.append(top_block)
-    
-    # 下側
-    bottom_block = box(extents=[grid_size * dot_size, out_thickness, base_height])
-    bottom_block.apply_translation([(grid_size * dot_size)/2, grid_size * dot_size + out_thickness/2, base_height/2])
-    layer_blocks.append(bottom_block)
     
     # グリッド内のベースプレート（必要な部分のみ）
     for y in range(grid_size):

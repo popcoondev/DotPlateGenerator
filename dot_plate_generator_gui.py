@@ -1134,32 +1134,9 @@ def generate_layer_stack_stl(pixels_rounded_np, output_base_path, grid_size, dot
         print(f"  ビル建設位置: {len(current_layer_positions)}個")  
         print(f"  空洞化位置: {len(non_building_positions)}個")
         
-        # 全体サイズ計算
-        total_size = grid_size * dot_size + 2 * out_thickness
-        
         # ベースプレートをグリッド単位で構築（穴と空洞を除く）
+        # 外周の縁取りは不要なので削除
         layer_blocks = []
-        
-        # 外周部分のベースプレート
-        # 左側
-        left_block = box(extents=[out_thickness, total_size, layer_base_height])
-        left_block.apply_translation([-out_thickness/2, (total_size)/2 - out_thickness, layer_base_height/2])
-        layer_blocks.append(left_block)
-        
-        # 右側  
-        right_block = box(extents=[out_thickness, total_size, layer_base_height])
-        right_block.apply_translation([grid_size * dot_size + out_thickness/2, (total_size)/2 - out_thickness, layer_base_height/2])
-        layer_blocks.append(right_block)
-        
-        # 上側
-        top_block = box(extents=[grid_size * dot_size, out_thickness, layer_base_height])
-        top_block.apply_translation([(grid_size * dot_size)/2, -out_thickness/2, layer_base_height/2])
-        layer_blocks.append(top_block)
-        
-        # 下側
-        bottom_block = box(extents=[grid_size * dot_size, out_thickness, layer_base_height])
-        bottom_block.apply_translation([(grid_size * dot_size)/2, grid_size * dot_size + out_thickness/2, layer_base_height/2])
-        layer_blocks.append(bottom_block)
         
         # グリッド内のベースプレート（必要な部分のみ）
         for y in range(grid_size):
