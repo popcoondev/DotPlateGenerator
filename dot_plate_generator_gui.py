@@ -985,48 +985,89 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
 def generate_checkerboard_stl(grid_size, dot_size, base_height,
                               wall_thickness, wall_height, mask=None):
     """
-    市松模様パターンのSTLを生成します。
-    mask指定で透過マスを除去し、輪郭を検知して側壁を追加します。
-    凸凹の深さは wall_height で、ベース厚みは base_height、
-    側壁の厚みは wall_thickness です。
-    :param grid_size: 1辺あたりのマス数
-    :param dot_size: 各マスのサイズ(mm)
-    :param base_height: ベースプレート厚み(mm)
-    :param wall_thickness: 側壁の厚み(mm)
-    :param wall_height: 凸凹(エンボス/デボス)の高さ(mm)
-    :param mask: 2D boolean配列 (grid_size x grid_size)。False はモデル除去。
+    改良版市松模様パターンのSTL生成（6段階高さ）
+    
+    隣接する8方向（縦横斜め）のドットの高さ重複を大幅削減し、
+    斜め方向への色移りを防止する。
+    
+    Args:
+        grid_size: 1辺あたりのマス数
+        dot_size: 各マスのサイズ(mm)
+        base_height: ベースプレート厚み(mm)
+        wall_thickness: 側壁の厚み(mm)
+        wall_height: 凸凹の高さ(mm)
+        mask: 2D boolean配列。False はモデル除去。
+    
+    Returns:
+        trimesh.Trimesh: 生成されたメッシュ
     """
     import trimesh
     from trimesh.creation import box
-    import numpy as _np
+    import numpy as np
 
     cells = []
-    # ベースセルの生成 (mask 指定で各セルごとに生成)
+    
+    # 6段階の高さレベルを定義（実用的な最適解）
+    height_levels = [
+        -wall_height,        # レベル0: 最も深い凹
+        -wall_height * 2/3,  # レベル1: 深い凹  
+        -wall_height * 1/3,  # レベル2: 浅い凹
+        +wall_height * 1/3,  # レベル3: 浅い凸
+        +wall_height * 2/3,  # レベル4: 高い凸
+        +wall_height         # レベル5: 最も高い凸
+    ]
+    
+    def get_height_level(i, j):
+        """
+        座標(i,j)に対応する高さレベル（0-5）を取得
+        隣接する8方向の高さ重複を最小化するよう配置
+        """
+        # 6x6パターンマトリックス（隣接8方向の重複を大幅削減）
+        pattern_matrix = [
+            [0, 5, 2, 4, 1, 3],
+            [3, 1, 4, 2, 5, 0],
+            [1, 4, 0, 5, 3, 2],
+            [4, 2, 5, 1, 0, 3],
+            [2, 0, 3, 4, 1, 5],
+            [5, 3, 1, 0, 2, 4]
+        ]
+        
+        pattern_x = i % 6
+        pattern_y = j % 6
+        return pattern_matrix[pattern_y][pattern_x]
+    
+    # ベースセルの生成（mask指定で各セルごとに生成）
     for i in range(grid_size):
         for j in range(grid_size):
             if mask is not None and not mask[j, i]:
                 continue
+                
             x0 = i * dot_size
             y0 = j * dot_size
             base_cube = box(extents=(dot_size, dot_size, base_height))
             base_cube.apply_translation((x0 + dot_size/2,
-                                         y0 + dot_size/2,
-                                         base_height/2))
+                                       y0 + dot_size/2,
+                                       base_height/2))
             cells.append(base_cube)
+    
     # 輪郭検知: 側壁の追加
     for i in range(grid_size):
         for j in range(grid_size):
             if mask is not None and not mask[j, i]:
                 continue
+                
             x0 = i * dot_size
             y0 = j * dot_size
+            
             for dx, dy, orient in [(-1, 0, 'L'), (1, 0, 'R'), (0, -1, 'B'), (0, 1, 'T')]:
                 ni, nj = i + dx, j + dy
                 neighbor = False
                 if 0 <= ni < grid_size and 0 <= nj < grid_size:
-                    neighbor = mask[nj, ni]
+                    neighbor = mask[nj, ni] if mask is not None else True
+                    
                 if neighbor:
                     continue
+                    
                 # 壁ボックス作成
                 if orient in ('L', 'R'):
                     w = box(extents=(wall_thickness, dot_size, base_height))
@@ -1036,27 +1077,39 @@ def generate_checkerboard_stl(grid_size, dot_size, base_height,
                     w = box(extents=(dot_size, wall_thickness, base_height))
                     cx = x0 + dot_size/2
                     cy = (y0 - wall_thickness/2) if orient == 'B' else (y0 + dot_size + wall_thickness/2)
+                    
                 w.apply_translation((cx, cy, base_height/2))
                 cells.append(w)
-    # 凸凹パターン (エンボス/デボス)
+    
+    # 6段階凸凹パターン
     for i in range(grid_size):
         for j in range(grid_size):
             if mask is not None and not mask[j, i]:
                 continue
+                
             x0 = i * dot_size
             y0 = j * dot_size
-            sign = 1 if (i + j) % 2 == 0 else -1
-            h = abs(wall_height)
-            if sign > 0:
+            
+            # この位置の高さレベルを取得
+            level = get_height_level(i, j)
+            height_offset = height_levels[level]
+            
+            # 凸凹ブロック作成
+            h = abs(height_offset)
+            if height_offset > 0:
+                # 凸（上に突出）
                 zc = base_height + h/2
             else:
+                # 凹（下に凹む）
                 zc = base_height - h/2
+                
             cube = box(extents=(dot_size, dot_size, h))
             cube.apply_translation((x0 + dot_size/2,
-                                    y0 + dot_size/2,
-                                    zc))
+                                  y0 + dot_size/2,
+                                  zc))
             cells.append(cube)
-    return trimesh.util.concatenate(cells)
+    
+    return trimesh.util.concatenate(cells) if cells else None
 
 def generate_layer_stack_stl(pixels_rounded_np, output_base_path, grid_size, dot_size, 
                             wall_thickness, wall_height, base_height, out_thickness,
