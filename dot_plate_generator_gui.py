@@ -1447,39 +1447,39 @@ def generate_plastic_model_stl(pixels_rounded_np, output_base_path, grid_size, d
                     layer_blocks.append(wall_block)
         
         # 同色ドット間の連結ブリッジを作成
-        if len(positions) > 1:
-            bridges = create_connection_bridges(positions, grid_size, dot_size)
-            layer_blocks.extend(bridges)
+        # if len(positions) > 1:
+        #     bridges = create_connection_bridges(positions, grid_size, dot_size)
+        #     layer_blocks.extend(bridges)
         
-        # スプルーシステム（ランナー）を追加
+        # # スプルーシステム（ランナー）を追加
         sprue_blocks = create_sprue_system(positions, grid_size, dot_size)
         layer_blocks.extend(sprue_blocks)
         
         # 組み立てピンシステムを追加
-        pin_blocks = add_assembly_pins(layer_blocks, color, grid_size)
-        layer_blocks.extend(pin_blocks)
+        # pin_blocks = add_assembly_pins(layer_blocks, color, grid_size)
+        # layer_blocks.extend(pin_blocks)
         
         # ベースプレート（この色の領域のみ）
-        if positions:
-            x_coords = [pos[0] for pos in positions]
-            y_coords = [pos[1] for pos in positions]
+        # if positions:
+        #     x_coords = [pos[0] for pos in positions]
+        #     y_coords = [pos[1] for pos in positions]
             
-            min_x, max_x = min(x_coords), max(x_coords)
-            min_y, max_y = min(y_coords), max(y_coords)
+        #     min_x, max_x = min(x_coords), max(x_coords)
+        #     min_y, max_y = min(y_coords), max(y_coords)
             
-            base_x1 = min_x * dot_size - wall_thickness
-            base_x2 = (max_x + 1) * dot_size + wall_thickness
-            base_y1 = (grid_size - 1 - max_y) * dot_size - wall_thickness
-            base_y2 = (grid_size - 1 - min_y + 1) * dot_size + wall_thickness
+        #     base_x1 = min_x * dot_size - wall_thickness
+        #     base_x2 = (max_x + 1) * dot_size + wall_thickness
+        #     base_y1 = (grid_size - 1 - max_y) * dot_size - wall_thickness
+        #     base_y2 = (grid_size - 1 - min_y + 1) * dot_size + wall_thickness
             
-            base_width = base_x2 - base_x1
-            base_depth = base_y2 - base_y1
+        #     base_width = base_x2 - base_x1
+        #     base_depth = base_y2 - base_y1
             
-            base_block = box(extents=[base_width, base_depth, base_height])
-            base_center_x = (base_x1 + base_x2) / 2
-            base_center_y = (base_y1 + base_y2) / 2
-            base_block.apply_translation([base_center_x, base_center_y, base_height / 2])
-            layer_blocks.append(base_block)
+        #     base_block = box(extents=[base_width, base_depth, base_height])
+        #     base_center_x = (base_x1 + base_x2) / 2
+        #     base_center_y = (base_y1 + base_y2) / 2
+        #     base_block.apply_translation([base_center_x, base_center_y, base_height / 2])
+        #     layer_blocks.append(base_block)
         
         # レイヤーメッシュを統合
         if layer_blocks:
