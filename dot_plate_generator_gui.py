@@ -1553,6 +1553,402 @@ def generate_assembly_instructions(output_base_path, layer_color_order, grid_siz
     with open(instructions_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
+def find_connected_components(grid_positions, grid_size):
+    """
+    グリッド座標から連結成分（島）を抽出する
+    
+    Args:
+        grid_positions: グリッド座標のリスト [(x, y), ...]
+        grid_size: グリッドサイズ
+    
+    Returns:
+        List[List[Tuple[int, int]]]: 各島のグリッド座標リスト
+    """
+    from collections import deque
+    
+    if not grid_positions:
+        return []
+    
+    # グリッド座標をセットに変換（高速検索用）
+    position_set = set(grid_positions)
+    visited = set()
+    islands = []
+    
+    # 4方向の隣接チェック（上下左右）
+    directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+    
+    for x, y in grid_positions:
+        if (x, y) not in visited:
+            # 新しい島を発見、幅優先探索で連結成分を抽出
+            island = []
+            queue = deque([(x, y)])
+            visited.add((x, y))
+            
+            while queue:
+                curr_x, curr_y = queue.popleft()
+                island.append((curr_x, curr_y))
+                
+                # 4方向の隣接セルをチェック
+                for dx, dy in directions:
+                    next_x, next_y = curr_x + dx, curr_y + dy
+                    
+                    # グリッド範囲内かつ未訪問かつ同色ドットの場合
+                    if (0 <= next_x < grid_size and 
+                        0 <= next_y < grid_size and
+                        (next_x, next_y) not in visited and
+                        (next_x, next_y) in position_set):
+                        
+                        visited.add((next_x, next_y))
+                        queue.append((next_x, next_y))
+            
+            islands.append(island)
+    
+    return islands
+
+def extract_base_candidates_around_dots(grid_positions, out_thickness_cells):
+    """
+    各ドットの周辺（out_thickness分拡張）にベース配置候補を抽出
+    
+    Args:
+        grid_positions: ドットのグリッド座標リスト [(x, y), ...]
+        out_thickness_cells: out_thicknessをグリッド単位に変換した値
+    
+    Returns:
+        Set[Tuple[int, int]]: ベース配置候補のグリッド座標セット
+    """
+    base_candidates = set()
+    
+    # 各ドットの周辺にベース配置候補を追加
+    for x, y in grid_positions:
+        # ドット周辺の拡張範囲を計算（グリッド単位）
+        for bx in range(x - out_thickness_cells, x + out_thickness_cells + 1):
+            for by in range(y - out_thickness_cells, y + out_thickness_cells + 1):
+                base_candidates.add((bx, by))
+    
+    return base_candidates
+
+def generate_connection_paths_between_islands(islands):
+    """
+    すべての島を一体化するための連結パスを生成
+    マンハッタン距離（水平→垂直）でパスを作成
+    
+    Args:
+        islands: 各島のグリッド座標リスト [[(x, y), ...], ...]
+    
+    Returns:
+        Set[Tuple[int, int]]: 連結パスのグリッド座標セット
+    """
+    if len(islands) <= 1:
+        return set()  # 島が1つ以下の場合は連結不要
+    
+    connection_paths = set()
+    
+    # 各島の代表点を選択（左上座標を使用）
+    representatives = []
+    for island in islands:
+        # 左上の座標を代表点とする
+        rep_x = min(pos[0] for pos in island)
+        rep_y = min(pos[1] for pos in island if pos[0] == rep_x)
+        representatives.append((rep_x, rep_y))
+    
+    print(f"    島の代表点: {representatives}")
+    
+    # 隣接する島同士を順次接続（チェーン状に接続）
+    for i in range(len(representatives) - 1):
+        start_x, start_y = representatives[i]
+        end_x, end_y = representatives[i + 1]
+        
+        # マンハッタン距離でパスを生成（水平→垂直）
+        # 1. 水平移動（start_x → end_x）
+        if start_x <= end_x:
+            for x in range(start_x, end_x + 1):
+                connection_paths.add((x, start_y))
+        else:
+            for x in range(end_x, start_x + 1):
+                connection_paths.add((x, start_y))
+        
+        # 2. 垂直移動（start_y → end_y）
+        if start_y <= end_y:
+            for y in range(start_y, end_y + 1):
+                connection_paths.add((end_x, y))
+        else:
+            for y in range(end_y, start_y + 1):
+                connection_paths.add((end_x, y))
+        
+        print(f"    島{i+1} → 島{i+2}: ({start_x},{start_y}) → ({end_x},{end_y})")
+    
+    return connection_paths
+
+def filter_base_positions_by_output_history(base_candidates, already_output_grid_positions):
+    """
+    ベース配置候補から、これまでに出力済みの座標を除外
+    
+    Args:
+        base_candidates: ベース配置候補のグリッド座標セット
+        already_output_grid_positions: これまでに出力済みのグリッド座標セット
+    
+    Returns:
+        Set[Tuple[int, int]]: フィルタ後のベース配置座標セット
+    """
+    # 【重要】ベース配置判定ロジック:
+    # - これまでに出力済み（手前レイヤーでビル/ベース済み）の場所のみNG
+    # - 今後の上位レイヤーでビルが立つ予定の座標は配置OK
+    filtered_positions = set()
+    
+    for grid_pos in base_candidates:
+        if grid_pos not in already_output_grid_positions:
+            # まだ出力済みでない座標 → ベース配置OK
+            filtered_positions.add(grid_pos)
+        # else: 既に出力済みの座標 → ベース配置NG
+    
+    return filtered_positions
+
+def convert_grid_to_world_coordinates(grid_positions, dot_size, grid_size):
+    """
+    グリッド座標をワールド座標（物理座標）に変換
+    
+    Args:
+        grid_positions: グリッド座標のセット/リスト
+        dot_size: ドットサイズ（mm）
+        grid_size: グリッドサイズ
+    
+    Returns:
+        Set[Tuple[float, float]]: ワールド座標のセット
+    """
+    world_positions = set()
+    
+    for x, y in grid_positions:
+        # グリッド座標をワールド座標に変換
+        world_x = x * dot_size + dot_size / 2
+        world_y = (grid_size - 1 - y) * dot_size + dot_size / 2
+        world_positions.add((world_x, world_y))
+    
+    return world_positions
+
+def convert_world_to_grid_coordinates(world_positions, dot_size, grid_size):
+    """
+    ワールド座標をグリッド座標に変換
+    
+    Args:
+        world_positions: ワールド座標のセット/リスト
+        dot_size: ドットサイズ（mm）
+        grid_size: グリッドサイズ
+    
+    Returns:
+        Set[Tuple[int, int]]: グリッド座標のセット
+    """
+    grid_positions = set()
+    
+    for world_x, world_y in world_positions:
+        # ワールド座標をグリッド座標に変換
+        x = int(round((world_x - dot_size / 2) / dot_size))
+        y = grid_size - 1 - int(round((world_y - dot_size / 2) / dot_size))
+        grid_positions.add((x, y))
+    
+    return grid_positions
+
+def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, grid_size, dot_size, 
+                                       wall_thickness, wall_height, base_height, out_thickness,
+                                       layer_color_order):
+    """
+    色別レイヤー分離出力モード用のSTL生成
+    各色ごとに分離したSTLファイルを出力。
+    各色レイヤーは「同色ドットでできた3Dビル」と「物理的に一体化する階段/直線ベース」で構成。
+    
+    【重要な仕様】
+    1. ベース配置条件: これまでに出力済みの座標のみNG、今後の上位レイヤー予定座標は配置OK
+    2. 島の一体化: すべての同色ドット島を物理的に連結
+    3. グリッド単位管理: 座標はすべてグリッドインデックスで一意管理
+    """
+    import trimesh
+    from trimesh.creation import box
+    import numpy as np
+    import os
+    
+    if len(layer_color_order) == 0:
+        return []
+    
+    generated_meshes = []
+    
+    # out_thicknessをグリッド単位に変換
+    out_thickness_cells = max(1, int(round(out_thickness / dot_size)))
+    print(f"Out thickness: {out_thickness}mm → {out_thickness_cells}グリッド")
+    
+    # 各色のグリッド座標を事前計算
+    color_grid_positions = {}
+    for color in layer_color_order:
+        color_arr = np.array(color, dtype=np.uint8)
+        mask = np.all(pixels_rounded_np == color_arr, axis=2)
+        y_indices, x_indices = np.where(mask)
+        
+        if len(x_indices) > 0:
+            # グリッド座標として保存 (x, y)
+            color_grid_positions[color] = list(zip(x_indices, y_indices))
+    
+    # これまでに出力済みのグリッド座標を追跡（ビル + ベース両方）
+    already_output_grid_positions = set()
+    
+    for layer_idx, color in enumerate(layer_color_order):
+        layer_num = layer_idx + 1
+        print(f"\n=== 色別レイヤー {layer_num} 処理開始 - RGB{color} ===")
+        
+        if color not in color_grid_positions or len(color_grid_positions[color]) == 0:
+            print(f"  色 RGB{color} のピクセルが見つかりません。スキップします。")
+            continue
+        
+        grid_positions = color_grid_positions[color]
+        print(f"  ドット位置: {len(grid_positions)}個 {grid_positions[:5]}{'...' if len(grid_positions) > 5 else ''}")
+        
+        # === 1. 島（連結成分）の抽出 ===
+        islands = find_connected_components(grid_positions, grid_size)
+        print(f"  検出された島数: {len(islands)}個")
+        for i, island in enumerate(islands):
+            print(f"    島{i+1}: {len(island)}ドット {island[:3]}{'...' if len(island) > 3 else ''}")
+        
+        # === 2. ベース配置候補の抽出 ===
+        base_candidates = extract_base_candidates_around_dots(grid_positions, out_thickness_cells)
+        print(f"  ベース配置候補: {len(base_candidates)}箇所")
+        
+        # === 3. 島間連結パスの生成 ===
+        connection_paths = generate_connection_paths_between_islands(islands)
+        print(f"  島間連結パス: {len(connection_paths)}箇所")
+        
+        # === 4. ベース配置位置の決定（出力済み座標を除外） ===
+        all_base_candidates = base_candidates | connection_paths
+        final_base_positions = filter_base_positions_by_output_history(
+            all_base_candidates, already_output_grid_positions)
+        print(f"  最終ベース配置: {len(final_base_positions)}箇所（除外: {len(all_base_candidates) - len(final_base_positions)}箇所）")
+        
+        # === 5. STLメッシュ構築 ===
+        layer_blocks = []
+        
+        # 5-1. ビル（3Dブロック）を生成
+        current_building_grid_positions = set(grid_positions)
+        building_world_positions = convert_grid_to_world_coordinates(
+            current_building_grid_positions, dot_size, grid_size)
+        
+        for world_x, world_y in building_world_positions:
+            building = box(extents=[dot_size - wall_thickness, dot_size - wall_thickness, wall_height])
+            building.apply_translation([world_x, world_y, base_height + wall_height / 2])
+            layer_blocks.append(building)
+        
+        # 5-2. ベース（底面プレート）を生成
+        base_world_positions = convert_grid_to_world_coordinates(
+            final_base_positions, dot_size, grid_size)
+        
+        for world_x, world_y in base_world_positions:
+            base_block = box(extents=[dot_size, dot_size, base_height])
+            base_block.apply_translation([world_x, world_y, base_height / 2])
+            layer_blocks.append(base_block)
+        
+        print(f"  ビル: {len(building_world_positions)}個, ベース: {len(base_world_positions)}個, 連結パス: {len(connection_paths)}箇所")
+        
+        # === 6. STLファイル出力 ===
+        try:
+            if layer_blocks:
+                layer_mesh = trimesh.util.concatenate(layer_blocks)
+                
+                # STLファイルとして保存
+                layer_filename = f"{output_base_path}_color_{layer_num:02d}_RGB{color[0]:03d}_{color[1]:03d}_{color[2]:03d}.stl"
+                layer_mesh.export(layer_filename)
+                print(f"  出力: {layer_filename}")
+                
+                generated_meshes.append(layer_mesh)
+                
+                # === 7. 出力済み座標の更新 ===
+                # ビル + ベース両方の座標を出力済みとして記録
+                already_output_grid_positions.update(current_building_grid_positions)
+                already_output_grid_positions.update(final_base_positions)
+                print(f"  出力済み座標更新: +{len(current_building_grid_positions) + len(final_base_positions)}箇所 (累計: {len(already_output_grid_positions)}箇所)")
+            else:
+                print(f"  色 RGB{color} のメッシュブロックが作成されませんでした。")
+        except Exception as e:
+            print(f"  色 RGB{color} のメッシュ生成エラー: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    # 色別分離用HTMLレポート生成
+    generate_color_separation_report(output_base_path, layer_color_order, grid_size, dot_size)
+    
+    return generated_meshes
+
+def generate_color_separation_report(output_base_path, layer_color_order, grid_size, dot_size):
+    """色別レイヤー分離用のHTMLレポートを生成"""
+    import time
+    import os
+    
+    html_content = f'''<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>色別レイヤー分離レポート</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .header {{ background-color: #f0f0f0; padding: 15px; border-radius: 5px; margin-bottom: 20px; }}
+        .layer-info {{ margin: 10px 0; padding: 10px; border-left: 4px solid #ccc; }}
+        .color-sample {{ 
+            display: inline-block; 
+            width: 30px; 
+            height: 30px; 
+            border: 1px solid #000; 
+            margin-right: 10px; 
+            vertical-align: middle;
+        }}
+        .info-table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+        .info-table th, .info-table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        .info-table th {{ background-color: #f2f2f2; }}
+        .instructions {{ background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>色別レイヤー分離STLファイル</h1>
+        <p>生成日時: {time.strftime("%Y-%m-%d %H:%M:%S")}</p>
+    </div>
+    
+    <div class="instructions">
+        <h2>使用方法</h2>
+        <p>各色のSTLファイルを3Dプリンターで異なる色の材料で印刷し、重ね合わせることで元の絵を再現できます。</p>
+        <ul>
+            <li>各レイヤーは物理的に独立しており、個別に印刷可能です</li>
+            <li>同色の「島」部分は階段/直線ベースで接続されており、一体成形されます</li>
+            <li>レイヤー番号が小さいほど手前（上位）に配置されます</li>
+        </ul>
+    </div>
+    
+    <table class="info-table">
+        <tr><th>設定項目</th><th>値</th></tr>
+        <tr><td>グリッドサイズ</td><td>{grid_size} x {grid_size}</td></tr>
+        <tr><td>ドットサイズ</td><td>{dot_size:.2f} mm</td></tr>
+        <tr><td>総レイヤー数</td><td>{len(layer_color_order)}</td></tr>
+    </table>
+    
+    <h2>レイヤー詳細</h2>'''
+    
+    for i, color in enumerate(layer_color_order):
+        layer_num = i + 1
+        color_hex = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+        filename = f"{os.path.basename(output_base_path)}_color_{layer_num:02d}_RGB{color[0]:03d}_{color[1]:03d}_{color[2]:03d}.stl"
+        
+        html_content += f'''
+    <div class="layer-info">
+        <h3>レイヤー {layer_num}</h3>
+        <div class="color-sample" style="background-color: {color_hex};"></div>
+        <strong>色:</strong> RGB({color[0]}, {color[1]}, {color[2]})
+        <br><strong>ファイル:</strong> {filename}
+    </div>'''
+    
+    html_content += '''
+</body>
+</html>'''
+    
+    report_path = f"{output_base_path}_color_separation_report.html"
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    print(f"色別分離レポート生成: {report_path}")
+
 # -------------------------------
 # ヘルプダイアログクラス
 # -------------------------------
@@ -2884,14 +3280,15 @@ class DotPlateApp(QMainWindow):
         mode_label = QLabel("STL出力モード:")
         mode_label.setToolTip("出力するSTLの種類を選択")
         self.stl_mode_combo = QComboBox()
-        # STL出力モード: 0=ドットプレート, 1=ドットプレート (同色内壁省略), 2=チェックボード (市松模様), 3=色レイヤーモード, 4=レイヤースタックモード, 5=プラモデル組み立て式モード
+        # STL出力モード: 0=ドットプレート, 1=ドットプレート (同色内壁省略), 2=チェックボード (市松模様), 3=色レイヤーモード, 4=レイヤースタックモード, 5=プラモデル組み立て式モード, 6=色別レイヤー分離出力モード
         self.stl_mode_combo.addItems([
             "ドットプレート",
             "ドットプレート (同色内壁省略)",
             "チェックボード (市松模様)",
             "色レイヤーモード",
             "レイヤースタックモード",
-            "プラモデル組み立て式モード"
+            "プラモデル組み立て式モード",
+            "色別レイヤー分離出力モード"
         ])
         self.stl_mode_combo.setToolTip("STL出力モードを選択")
         # 選択値を保持
@@ -5209,6 +5606,66 @@ class DotPlateApp(QMainWindow):
                     import traceback
                     traceback.print_exc()
                     self.input_label.setText(f"プラモデルSTL生成エラー: {str(e)}")
+            return
+        
+        # 色別レイヤー分離出力モードの処理
+        if getattr(self, 'stl_mode', 0) == 6:
+            import os
+            separation_path, _ = QFileDialog.getSaveFileName(
+                self, "色別レイヤー分離STLを保存（ベースファイル名）", "color_separated", "STLファイル (*.stl)"
+            )
+            if separation_path:
+                base_path = os.path.splitext(separation_path)[0]
+                params = {key: spin.value() for key, spin in self.controls.items()}
+                
+                # 前提条件チェック
+                if not hasattr(self, 'layer_color_order') or not self.layer_color_order:
+                    QMessageBox.warning(self, "レイヤー設定エラー", "レイヤー設定が見つかりません。先にレイヤー設定を行ってください。")
+                    return
+                
+                if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+                    QMessageBox.warning(self, "ピクセルデータエラー", "編集可能なピクセルデータがありません。先に画像を読み込んでプレビューを生成してください。")
+                    return
+                
+                try:
+                    self.input_label.setText("色別レイヤー分離STLファイルを生成中...")
+                    QApplication.processEvents()
+                    
+                    # 色別レイヤー分離STL生成
+                    meshes = generate_color_separated_layers_stl(
+                        self.pixels_rounded_np,
+                        base_path,
+                        int(params.get("Grid Size", 0)),
+                        float(params.get("Dot Size", 0.0)),
+                        float(params.get("Wall Thickness", 0.0)),
+                        float(params.get("Wall Height", 0.0)),
+                        float(params.get("Base Height", 0.0)),
+                        float(params.get("Out Thickness", 0.0)),
+                        self.layer_color_order
+                    )
+                    
+                    if meshes:
+                        # 最初のレイヤーをプレビュー表示
+                        self.show_stl_preview(meshes[0])
+                        
+                        # HTMLレポート生成
+                        first_layer_path = f"{base_path}_color_01_RGB{self.layer_color_order[0][0]:03d}_{self.layer_color_order[0][1]:03d}_{self.layer_color_order[0][2]:03d}.stl"
+                        html_path = self.generate_html_report(first_layer_path, meshes[0])
+                        
+                        layers_count = len(meshes)
+                        report_path = f"{base_path}_color_separation_report.html"
+                        message = f"{layers_count}個の色別レイヤーを {base_path}_color_XX_RGBXXX_XXX_XXX.stl として出力、分離レポート {report_path} も生成しました"
+                        if html_path:
+                            message += f"、HTMLレポート {html_path} も生成しました"
+                        self.input_label.setText(message)
+                    else:
+                        self.input_label.setText("色別レイヤー分離STLの生成に失敗しました")
+                        
+                except Exception as e:
+                    print(f"色別レイヤー分離STL生成エラー: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    self.input_label.setText(f"色別レイヤー分離STL生成エラー: {str(e)}")
             return
 
         # 通常モード: ドットプレートSTL出力
