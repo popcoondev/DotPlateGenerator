@@ -1884,12 +1884,71 @@ def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, gri
         # 透明セルごとに薄板を配置
         # 座標変換にまとめて利用
         if transparent_cells:
+            # 透明セルごとに薄板を配置
             worlds = convert_grid_to_world_coordinates(transparent_cells, dot_size, grid_size)
             for wx, wy in worlds:
                 blk = box(extents=[dot_size, dot_size, plate_thickness])
                 # Z位置は既存レイヤーの最上部に配置
                 blk.apply_translation([wx, wy, base_height + wall_height + plate_thickness / 2])
                 plate_blocks.append(blk)
+            # === トッププレート外枠生成（上下左右） ===
+            # プレビュー画像（有色セル）を中心に均等に枠を配置
+            # 有色セルのグリッド位置を集約
+            if color_grid_positions:
+                colored_cells = set().union(*color_grid_positions.values())
+            else:
+                colored_cells = set()
+            if colored_cells:
+                # 有色セルをワールド座標に変換
+                colored_worlds = convert_grid_to_world_coordinates(colored_cells, dot_size, grid_size)
+                xs_c = [wx for wx, wy in colored_worlds]
+                ys_c = [wy for wx, wy in colored_worlds]
+                # プレビュー画像のバウンディングボックス
+                half_dot = dot_size / 2
+                min_px = min(xs_c) - half_dot
+                max_px = max(xs_c) + half_dot
+                min_py = min(ys_c) - half_dot
+                max_py = max(ys_c) + half_dot
+                preview_w = max_px - min_px
+                preview_h = max_py - min_py
+                # 枠内側領域サイズ（フレーム内壁までのスペース）
+                extra_space = 2 * dot_size + 1.0
+                inner_w = grid_size * dot_size + 2 * out_thickness + extra_space
+                inner_h = inner_w
+                # プレビュー中心
+                center_px = (min_px + max_px) / 2
+                center_py = (min_py + max_py) / 2
+                # 枠領域バウンディング
+                min_fx = center_px - inner_w / 2
+                max_fx = center_px + inner_w / 2
+                min_fy = center_py - inner_h / 2
+                max_fy = center_py + inner_h / 2
+                # Z位置
+                zc = base_height + wall_height + plate_thickness / 2
+                # 下枠: x全域, y=[min_fy, min_py]
+                bottom_h = min_py - min_fy
+                if bottom_h > 0:
+                    blk = box(extents=[inner_w, bottom_h, plate_thickness])
+                    blk.apply_translation([center_px, min_fy + bottom_h/2, zc])
+                    plate_blocks.append(blk)
+                # 上枠: x全域, y=[max_py, max_fy]
+                top_h = max_fy - max_py
+                if top_h > 0:
+                    blk = box(extents=[inner_w, top_h, plate_thickness])
+                    blk.apply_translation([center_px, max_py + top_h/2, zc])
+                    plate_blocks.append(blk)
+                # 左枠: x=[min_fx, min_px], y全域プレビュー高さ
+                left_w = min_px - min_fx
+                if left_w > 0 and preview_h > 0:
+                    blk = box(extents=[left_w, preview_h, plate_thickness])
+                    blk.apply_translation([min_fx + left_w/2, center_py, zc])
+                    plate_blocks.append(blk)
+                # 右枠: x=[max_px, max_fx], y全域プレビュー高さ
+                right_w = max_fx - max_px
+                if right_w > 0 and preview_h > 0:
+                    blk = box(extents=[right_w, preview_h, plate_thickness])
+                    blk.apply_translation([max_px + right_w/2, center_py, zc])
+                    plate_blocks.append(blk)
         if plate_blocks:
             top_plate = trimesh.util.concatenate(plate_blocks)
             top_filename = f"{output_base_path}_top_plate.stl"
