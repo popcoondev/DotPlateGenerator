@@ -1868,6 +1868,39 @@ def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, gri
             traceback.print_exc()
             continue
     
+    # === トッププレート生成 ===
+    # プレビュー画像の透過部分（色未指定セル）だけを残して抜き出すプレート
+    try:
+        print(f"\n=== トッププレート生成 ===")
+        # 全グリッド座標から、色付きドット座標を除外して透明部分を取得
+        all_cells = {(x, y) for x in range(grid_size) for y in range(grid_size)}
+        colored_cells = set()
+        for pts in color_grid_positions.values():
+            colored_cells.update(pts)
+        transparent_cells = all_cells - colored_cells
+        # プレート厚みはベース高さを利用
+        plate_thickness = base_height
+        plate_blocks = []
+        # 透明セルごとに薄板を配置
+        # 座標変換にまとめて利用
+        if transparent_cells:
+            worlds = convert_grid_to_world_coordinates(transparent_cells, dot_size, grid_size)
+            for wx, wy in worlds:
+                blk = box(extents=[dot_size, dot_size, plate_thickness])
+                # Z位置は既存レイヤーの最上部に配置
+                blk.apply_translation([wx, wy, base_height + wall_height + plate_thickness / 2])
+                plate_blocks.append(blk)
+        if plate_blocks:
+            top_plate = trimesh.util.concatenate(plate_blocks)
+            top_filename = f"{output_base_path}_top_plate.stl"
+            top_plate.export(top_filename)
+            print(f"  トッププレート出力: {top_filename}")
+            generated_meshes.append(top_plate)
+        else:
+            print("  トッププレート生成対象の透明セルがありません。スキップします。")
+    except Exception:
+        print("  トッププレート生成中にエラーが発生しました。スキップします。")
+        import traceback; traceback.print_exc()
     # レジン固め用フレーム生成
     print(f"\n=== レジン固め用フレーム生成 ===")
     frame_mesh = generate_resin_frame_stl(
