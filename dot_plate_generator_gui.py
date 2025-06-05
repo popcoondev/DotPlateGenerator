@@ -1868,10 +1868,175 @@ def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, gri
             traceback.print_exc()
             continue
     
+    # レジン固め用フレーム生成
+    print(f"\n=== レジン固め用フレーム生成 ===")
+    frame_mesh = generate_resin_frame_stl(
+        output_base_path, grid_size, dot_size, base_height, wall_height, out_thickness, 
+        layer_count=len(layer_color_order)
+    )
+    if frame_mesh:
+        generated_meshes.append(frame_mesh)
+    
     # 色別分離用HTMLレポート生成
     generate_color_separation_report(output_base_path, layer_color_order, grid_size, dot_size)
     
     return generated_meshes
+
+def generate_resin_frame_stl(output_base_path, grid_size, dot_size, base_height, wall_height, 
+                            out_thickness, layer_count, frame_wall_thickness=1.0, frame_height_margin=5.0):
+    """
+    レジン固め用フレーム（天井だけが空いた箱型）を生成
+    
+    Args:
+        output_base_path: 出力ファイルのベースパス
+        grid_size: グリッドサイズ
+        dot_size: ドットサイズ（mm）
+        base_height: ベース高さ（mm）
+        wall_height: ビル高さ（mm）
+        out_thickness: 外側厚み（mm）
+        layer_count: レイヤー数（フレーム高さ計算用）
+        frame_wall_thickness: フレーム壁厚（mm）
+        frame_height_margin: フレーム高さマージン（mm）
+    
+    Returns:
+        trimesh.Trimesh: フレームのメッシュオブジェクト
+    """
+    import trimesh
+    from trimesh.creation import box
+    import numpy as np
+    
+    # 全体サイズ計算
+    total_width = grid_size * dot_size + 2 * out_thickness
+    total_depth = grid_size * dot_size + 2 * out_thickness
+    total_layer_height = base_height + wall_height
+    
+    # 刻み間隔の計算（BaseHeight + WallHeight + 2mm）
+    notch_interval = total_layer_height + 2.0
+    
+    # フレーム高さ計算（レイヤー数に基づいて動的計算）
+    frame_height = layer_count * notch_interval + frame_height_margin
+    
+    # 内側寸法（コンテンツが収まるサイズ）
+    inner_width = total_width
+    inner_depth = total_depth
+    inner_height = frame_height
+    
+    # 外側寸法（フレーム壁厚を追加）
+    outer_width = inner_width + 2 * frame_wall_thickness
+    outer_depth = inner_depth + 2 * frame_wall_thickness
+    outer_height = inner_height
+    
+    print(f"  フレーム寸法: 外側 {outer_width:.1f}x{outer_depth:.1f}x{outer_height:.1f}mm")
+    print(f"  内側収納: {inner_width:.1f}x{inner_depth:.1f}x{inner_height:.1f}mm")
+    print(f"  刻み間隔: {notch_interval:.1f}mm")
+    
+    frame_blocks = []
+    
+    # === 1. 基本フレーム構造（天井だけが空いた箱型）を作成 ===
+    
+    # 1-1. 底面プレート
+    bottom_plate = box(extents=[outer_width, outer_depth, frame_wall_thickness])
+    bottom_plate.apply_translation([outer_width/2 - frame_wall_thickness, 
+                                   outer_depth/2 - frame_wall_thickness, 
+                                   frame_wall_thickness/2])
+    frame_blocks.append(bottom_plate)
+    
+    # 1-2. 左壁
+    left_wall = box(extents=[frame_wall_thickness, outer_depth, outer_height])
+    left_wall.apply_translation([frame_wall_thickness/2 - frame_wall_thickness, 
+                                outer_depth/2 - frame_wall_thickness, 
+                                outer_height/2])
+    frame_blocks.append(left_wall)
+    
+    # 1-3. 右壁
+    right_wall = box(extents=[frame_wall_thickness, outer_depth, outer_height])
+    right_wall.apply_translation([outer_width - frame_wall_thickness/2 - frame_wall_thickness, 
+                                 outer_depth/2 - frame_wall_thickness, 
+                                 outer_height/2])
+    frame_blocks.append(right_wall)
+    
+    # 1-4. 奥壁
+    back_wall = box(extents=[inner_width, frame_wall_thickness, outer_height])
+    back_wall.apply_translation([inner_width/2, 
+                                outer_depth - frame_wall_thickness/2 - frame_wall_thickness, 
+                                outer_height/2])
+    frame_blocks.append(back_wall)
+    
+    # 1-5. 手前壁（コの字から箱型に変更）
+    front_wall = box(extents=[inner_width, frame_wall_thickness, outer_height])
+    front_wall.apply_translation([inner_width/2, 
+                                 frame_wall_thickness/2 - frame_wall_thickness, 
+                                 outer_height/2])
+    frame_blocks.append(front_wall)
+    
+    # === 2. 内壁の水平ガイドライン（カップラーメン風の線）を作成 ===
+    
+    # 基本フレームを結合
+    frame_mesh = trimesh.util.concatenate(frame_blocks)
+    
+    line_height = 0.8  # ライン高さ（mm）
+    line_depth = 0.4   # ライン深さ（mm）
+    
+    # ガイドラインの数を計算（各レイヤーの配置位置に）
+    num_guidelines = layer_count
+    
+    print(f"  レイヤーガイドライン数: {num_guidelines}個")
+    
+    # 各レイヤーの配置高さにガイドライン（線状の突起）を作成
+    groove_blocks = []
+    for i in range(1, num_guidelines + 1):
+        guideline_height = i * notch_interval
+        
+        if guideline_height <= frame_height - line_height/2:
+            # 左壁の線
+            left_line = box(extents=[line_depth, inner_depth - 0.5, line_height])
+            left_line.apply_translation([frame_wall_thickness - line_depth/2 - frame_wall_thickness, 
+                                       inner_depth/2, 
+                                       guideline_height])
+            groove_blocks.append(left_line)
+            
+            # 右壁の線
+            right_line = box(extents=[line_depth, inner_depth - 0.5, line_height])
+            right_line.apply_translation([outer_width - frame_wall_thickness + line_depth/2 - frame_wall_thickness, 
+                                        inner_depth/2, 
+                                        guideline_height])
+            groove_blocks.append(right_line)
+            
+            # 奥壁の線
+            back_line = box(extents=[inner_width - 0.5, line_depth, line_height])
+            back_line.apply_translation([inner_width/2, 
+                                       outer_depth - frame_wall_thickness + line_depth/2 - frame_wall_thickness, 
+                                       guideline_height])
+            groove_blocks.append(back_line)
+            
+            # 手前壁の線
+            front_line = box(extents=[inner_width - 0.5, line_depth, line_height])
+            front_line.apply_translation([inner_width/2, 
+                                        frame_wall_thickness - line_depth/2 - frame_wall_thickness, 
+                                        guideline_height])
+            groove_blocks.append(front_line)
+            
+            print(f"    レイヤー{i}ガイドライン: 高さ {guideline_height:.1f}mm")
+    
+    # ガイドライン突起を追加
+    if groove_blocks:
+        groove_mesh = trimesh.util.concatenate(groove_blocks)
+        frame_mesh = trimesh.util.concatenate([frame_mesh, groove_mesh])
+    
+    # === 3. 最終フレーム出力 ===
+    try:
+        # STLファイルとして保存
+        frame_filename = f"{output_base_path}_resin_frame.stl"
+        frame_mesh.export(frame_filename)
+        print(f"  レジンフレーム出力: {frame_filename}")
+        
+        return frame_mesh
+        
+    except Exception as e:
+        print(f"  レジンフレーム生成エラー: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 def generate_color_separation_report(output_base_path, layer_color_order, grid_size, dot_size):
     """色別レイヤー分離用のHTMLレポートを生成"""
@@ -1914,7 +2079,18 @@ def generate_color_separation_report(output_base_path, layer_color_order, grid_s
             <li>各レイヤーは物理的に独立しており、個別に印刷可能です</li>
             <li>同色の「島」部分は階段/直線ベースで接続されており、一体成形されます</li>
             <li>レイヤー番号が小さいほど手前（上位）に配置されます</li>
+            <li><strong>レジンフレーム:</strong> 全レイヤーを固定するコの字型フレームも生成されます</li>
         </ul>
+    </div>
+    
+    <div class="instructions" style="background-color: #e8f5e8;">
+        <h2>レジン作品制作手順</h2>
+        <ol>
+            <li>レジンフレーム（{os.path.basename(output_base_path)}_resin_frame.stl）を3D印刷</li>
+            <li>各色レイヤーを順番に配置（内壁の刻みがガイドライン）</li>
+            <li>透明レジンを流し込んで固化</li>
+            <li>フレームから取り出して完成</li>
+        </ol>
     </div>
     
     <table class="info-table">
@@ -1922,6 +2098,8 @@ def generate_color_separation_report(output_base_path, layer_color_order, grid_s
         <tr><td>グリッドサイズ</td><td>{grid_size} x {grid_size}</td></tr>
         <tr><td>ドットサイズ</td><td>{dot_size:.2f} mm</td></tr>
         <tr><td>総レイヤー数</td><td>{len(layer_color_order)}</td></tr>
+        <tr><td>レジンフレーム</td><td>{os.path.basename(output_base_path)}_resin_frame.stl</td></tr>
+        <tr><td>フレーム用途</td><td>レジン固化用コの字型容器</td></tr>
     </table>
     
     <h2>レイヤー詳細</h2>'''
