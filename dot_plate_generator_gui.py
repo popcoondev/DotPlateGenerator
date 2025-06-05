@@ -1878,8 +1878,8 @@ def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, gri
         for pts in color_grid_positions.values():
             colored_cells.update(pts)
         transparent_cells = all_cells - colored_cells
-        # プレート厚みはベース高さを利用
-        plate_thickness = base_height
+        # プレート厚みはビルの高さ（wall_height）を利用
+        plate_thickness = wall_height
         plate_blocks = []
         # 透明セルごとに薄板を配置
         # 座標変換にまとめて利用
