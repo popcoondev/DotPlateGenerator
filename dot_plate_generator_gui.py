@@ -1916,9 +1916,10 @@ def generate_resin_frame_stl(output_base_path, grid_size, dot_size, base_height,
     # フレーム高さ計算（レイヤー数に基づいて動的計算）
     frame_height = layer_count * notch_interval + frame_height_margin
     
-    # 内側寸法（コンテンツが収まるサイズ）
-    inner_width = total_width
-    inner_depth = total_depth
+    # 内側寸法（ベースプレートも含めてドット2つ分+1mm余裕を追加）
+    extra_space = 2 * dot_size + 1.0  # ドット2つ分 + 1mm余裕
+    inner_width = total_width + extra_space
+    inner_depth = total_depth + extra_space
     inner_height = frame_height
     
     # 外側寸法（フレーム壁厚を追加）
@@ -1932,47 +1933,57 @@ def generate_resin_frame_stl(output_base_path, grid_size, dot_size, base_height,
     
     frame_blocks = []
     
-    # === 1. 基本フレーム構造（天井だけが空いた箱型）を作成 ===
+    # === 1. 基本フレーム構造（底面と壁を分離）を作成 ===
     
-    # 1-1. 底面プレート
+    # 底面プレートと壁を分離して生成
+    frame_meshes = []
+    
+    # 1-1. 底面プレート（別STLファイルとして出力）
     bottom_plate = box(extents=[outer_width, outer_depth, frame_wall_thickness])
     bottom_plate.apply_translation([outer_width/2 - frame_wall_thickness, 
                                    outer_depth/2 - frame_wall_thickness, 
                                    frame_wall_thickness/2])
-    frame_blocks.append(bottom_plate)
     
-    # 1-2. 左壁
+    # 底面プレートを別ファイルとして保存
+    bottom_filename = f"{output_base_path}_resin_frame_bottom.stl"
+    bottom_plate.export(bottom_filename)
+    print(f"  レジンフレーム底面出力: {bottom_filename}")
+    frame_meshes.append(bottom_plate)
+    
+    # 1-2. 壁部分（4面）をframe_blocksに追加
+    wall_blocks = []
+    
+    # 左壁
     left_wall = box(extents=[frame_wall_thickness, outer_depth, outer_height])
     left_wall.apply_translation([frame_wall_thickness/2 - frame_wall_thickness, 
                                 outer_depth/2 - frame_wall_thickness, 
                                 outer_height/2])
-    frame_blocks.append(left_wall)
+    wall_blocks.append(left_wall)
     
-    # 1-3. 右壁
+    # 右壁
     right_wall = box(extents=[frame_wall_thickness, outer_depth, outer_height])
     right_wall.apply_translation([outer_width - frame_wall_thickness/2 - frame_wall_thickness, 
                                  outer_depth/2 - frame_wall_thickness, 
                                  outer_height/2])
-    frame_blocks.append(right_wall)
+    wall_blocks.append(right_wall)
     
-    # 1-4. 奥壁
+    # 奥壁
     back_wall = box(extents=[inner_width, frame_wall_thickness, outer_height])
     back_wall.apply_translation([inner_width/2, 
                                 outer_depth - frame_wall_thickness/2 - frame_wall_thickness, 
                                 outer_height/2])
-    frame_blocks.append(back_wall)
+    wall_blocks.append(back_wall)
     
-    # 1-5. 手前壁（コの字から箱型に変更）
+    # 手前壁
     front_wall = box(extents=[inner_width, frame_wall_thickness, outer_height])
     front_wall.apply_translation([inner_width/2, 
                                  frame_wall_thickness/2 - frame_wall_thickness, 
                                  outer_height/2])
-    frame_blocks.append(front_wall)
+    wall_blocks.append(front_wall)
+    
+    frame_blocks.extend(wall_blocks)
     
     # === 2. 内壁の水平ガイドライン（カップラーメン風の線）を作成 ===
-    
-    # 基本フレームを結合
-    frame_mesh = trimesh.util.concatenate(frame_blocks)
     
     line_height = 0.8  # ライン高さ（mm）
     line_depth = 0.4   # ライン深さ（mm）
@@ -2018,19 +2029,31 @@ def generate_resin_frame_stl(output_base_path, grid_size, dot_size, base_height,
             
             print(f"    レイヤー{i}ガイドライン: 高さ {guideline_height:.1f}mm")
     
+    # === 3. 壁部分とガイドラインを結合して出力 ===
+    
+    # 壁部分を結合
+    walls_mesh = trimesh.util.concatenate(frame_blocks)
+    
     # ガイドライン突起を追加
     if groove_blocks:
         groove_mesh = trimesh.util.concatenate(groove_blocks)
-        frame_mesh = trimesh.util.concatenate([frame_mesh, groove_mesh])
+        walls_mesh = trimesh.util.concatenate([walls_mesh, groove_mesh])
     
-    # === 3. 最終フレーム出力 ===
+    # 壁部分を別ファイルとして保存
+    walls_filename = f"{output_base_path}_resin_frame_walls.stl"
+    walls_mesh.export(walls_filename)
+    print(f"  レジンフレーム壁面出力: {walls_filename}")
+    frame_meshes.append(walls_mesh)
+    
+    # === 4. 最終フレーム出力（参考用統合版） ===
     try:
-        # STLファイルとして保存
-        frame_filename = f"{output_base_path}_resin_frame.stl"
-        frame_mesh.export(frame_filename)
-        print(f"  レジンフレーム出力: {frame_filename}")
+        # 統合版も出力（参考用）
+        combined_mesh = trimesh.util.concatenate([bottom_plate, walls_mesh])
+        combined_filename = f"{output_base_path}_resin_frame_combined.stl"
+        combined_mesh.export(combined_filename)
+        print(f"  レジンフレーム統合版: {combined_filename}")
         
-        return frame_mesh
+        return combined_mesh
         
     except Exception as e:
         print(f"  レジンフレーム生成エラー: {str(e)}")
