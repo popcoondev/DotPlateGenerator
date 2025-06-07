@@ -3646,6 +3646,11 @@ class DotPlateApp(QMainWindow):
         sort_layout.addWidget(sat_asc_btn)
         sort_layout.addWidget(sat_desc_btn)
         layer_group_layout.addLayout(sort_layout)
+        # パス最適順ボタン：島間接続パスの配置数を最大化するレイヤー順を提案
+        self.optim_order_button = QPushButton("パス最適順")
+        self.optim_order_button.setToolTip("島間接続パスの配置数を最大化するレイヤー順を提案します")
+        self.optim_order_button.clicked.connect(self.optimize_layer_order)
+        layer_group_layout.addWidget(self.optim_order_button)
         # 各色ごとの高さ設定用スクロール領域
         layer_group_layout.addWidget(self.layer_scroll)
         self.layer_group.setLayout(layer_group_layout)
@@ -5591,6 +5596,49 @@ class DotPlateApp(QMainWindow):
         self.layer_color_order.sort(key=saturation, reverse=not ascending)
         self.update_layer_controls()
     
+    def optimize_layer_order(self):
+        """Optimize layer order to maximize inter-island connection paths."""
+        # Ensure pixel data is available
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            QMessageBox.warning(self, "警告", "レイヤーの最適化には画像の読み込みと減色処理が必要です")
+            return
+        import numpy as np
+        from collections import deque
+        # Compute connection path counts per color
+        counts = {}
+        height, width = self.pixels_rounded_np.shape[:2]
+        for color in self.layer_color_order:
+            if color == (0, 0, 0):
+                counts[color] = 0
+                continue
+            # Create mask for the color
+            mask = np.all(self.pixels_rounded_np == color, axis=2)
+            visited = set()
+            islands = []
+            # Detect islands (connected components)
+            for y in range(height):
+                for x in range(width):
+                    if mask[y, x] and (x, y) not in visited:
+                        queue = deque([(x, y)])
+                        visited.add((x, y))
+                        island = []
+                        while queue:
+                            xx, yy = queue.popleft()
+                            island.append((xx, yy))
+                            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                                nx, ny = xx + dx, yy + dy
+                                if 0 <= nx < width and 0 <= ny < height and mask[ny, nx] and (nx, ny) not in visited:
+                                    visited.add((nx, ny))
+                                    queue.append((nx, ny))
+                        islands.append(island)
+            # Generate paths between islands and count unique positions
+            paths = generate_connection_paths_between_islands(islands)
+            counts[color] = len(paths)
+        # Sort layers by descending number of paths
+        self.layer_color_order.sort(key=lambda c: counts.get(c, 0), reverse=True)
+        self.update_layer_controls()
+        QMessageBox.information(self, "パス最適順", "レイヤー順序をパス数が多い順に並び替えました")
+
     def on_layer_reordered(self, parent, start, end, destination, row):
         """Update layer_color_order after drag-and-drop reordering."""
         new_order = []
