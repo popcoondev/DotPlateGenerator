@@ -3736,6 +3736,12 @@ class DotPlateApp(QMainWindow):
         mode_toolbar.addWidget(bucket_mode_btn)
         mode_toolbar.addWidget(select_mode_btn)
         mode_toolbar.addWidget(self.ai_brush_btn)
+        # 全体AIブラシ: プレビュー内の特徴色を指定色数に丸め込む
+        self.global_brush_btn = QPushButton("全体AIブラシ")
+        self.global_brush_btn.setToolTip("プレビュー内の特徴色を指定色数に丸め込む")
+        self.global_brush_btn.setMinimumWidth(80)
+        self.global_brush_btn.clicked.connect(self.handle_global_brush)
+        mode_toolbar.addWidget(self.global_brush_btn)
         
         color_toolbar = QHBoxLayout()
         color_toolbar.addWidget(self.color_pick_btn)
@@ -4519,94 +4525,76 @@ class DotPlateApp(QMainWindow):
         self.set_paint_mode(True)
 
     def call_ai_brush_api(self, selected_color, grid_x, grid_y):
-        """OpenAI APIを使用してピクセルデータを更新する"""
-        if not getattr(self, 'openai_api_key', None):
-            QMessageBox.warning(self, "APIキー未設定", "まず[設定]メニューからAPIキーを設定してください。")
+        """AIブラシ: 選択した色に近いピクセルを同色系で統合し置換するローカル処理"""
+        # ピクセルデータを取得
+        pixels = self.pixels_rounded_np
+        if pixels is None:
             return None
-        self.statusBar().showMessage("AIブラシ処理中...")
+        # 選択色をNumPy配列に
+        sel = np.array(selected_color, dtype=int)
+        # 各ピクセルとの距離（Euclid）を計算
+        diff = np.linalg.norm(pixels.astype(int) - sel[None, None, :], axis=2)
+        # 類似色検出の閾値（調整可能）
+        threshold = 30
+        # マスクを作成
+        mask = diff <= threshold
+        # 類似色がない場合は通知して終了
+        if not np.any(mask):
+            QMessageBox.information(self, "AIブラシ", "選択色に近い色のドットが見つかりませんでした。閾値を調整してください。")
+            return None
+        # 類似色のピクセル色を抽出
+        similar_colors = pixels[mask].reshape(-1, 3)
+        # 最頻出色を取得
+        unique, counts = np.unique(similar_colors, axis=0, return_counts=True)
+        target_color = unique[counts.argmax()]
+        # ピクセルデータをコピーして更新
+        new_pixels = pixels.copy()
+        new_pixels[mask] = target_color
+        # ステータスバーに結果を表示
+        self.statusBar().showMessage(f"AIブラシ: {counts.max()} ドットを色 {tuple(target_color)} に統一しました", 3000)
+        return new_pixels
+    
+    def handle_global_brush(self):
+        """全体AIブラシ: プレビュー内の特徴色を指定色数に丸め込む処理"""
+        # ピクセルデータがない場合は何もしない
+        if self.pixels_rounded_np is None:
+            return
+        # 色数入力ダイアログを表示
+        n_colors, ok = QInputDialog.getInt(self, "全体AIブラシ", "変換後の色数を入力してください:", 8, 1, 256)
+        if not ok:
+            return
+        # 既存ピクセルを取得
+        pixels = self.pixels_rounded_np
+        h, w, _ = pixels.shape
+        flat = pixels.reshape(-1, 3)
+        # 透過色は変更せず残す
+        tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
+        mask = ~np.all(flat == tc, axis=1)
+        valid = flat[mask]
+        if valid.size == 0:
+            QMessageBox.information(self, "全体AIブラシ", "変換対象のドットがありませんでした。透過色設定を確認してください。")
+            return
+        # K-meansで代表色を抽出（失敗時はメディアンカット）
         try:
-            # ピクセルデータをJSONに変換
-            pixel_list = self.pixels_rounded_np.tolist()
-            # プロンプト作成
-            brush_color = (self.current_paint_color.red(), self.current_paint_color.green(), self.current_paint_color.blue())
-            # プロンプト：選択した色に近いピクセルを指定色に変更するよう指示
-            prompt = (
-                f"ピクセルデータは三重配列のJSONです。選択された座標({grid_x},{grid_y})の色{selected_color}に近い色のすべてのピクセルを"
-                f"指定の色{brush_color}に変更してください。変更後のピクセルデータ配列をJSON形式のみで返してください。"
-            )
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant for pixel editing."},
-                {"role": "user", "content": prompt + " ピクセルデータ: " + json.dumps(pixel_list)}
-            ]
-            # 設定されたAPIキーを適用
-            openai.api_key = self.openai_api_key
-            try:
-                # OpenAI Python >=1.0.0: 新クライアントAPIを使用
-                client = openai.OpenAI(api_key=self.openai_api_key)
-                response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    temperature=0
-                )
-            except AttributeError:
-                # OpenAI Python <1.0.0: 従来のインターフェースにフォールバック
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    temperature=0
-                )
-            # モデル応答からテキストを取得
-            raw = response.choices[0].message.content.strip()
-            text = raw
-            # Markdownコードフェンスを除去
-            if text.startswith('```'):
-                parts = text.split('```')
-                # フェンス内の先頭にあるJSON/リストを探す
-                for part in parts:
-                    p = part.strip()
-                    if p.startswith('[') or p.startswith('{'):
-                        text = p
-                        break
-            # 先頭のリスト/オブジェクトをバランスマッチで抽出
-            def extract_balance(s, open_ch, close_ch):
-                start = s.find(open_ch)
-                if start < 0:
-                    return None
-                lvl = 1
-                for idx in range(start+1, len(s)):
-                    c = s[idx]
-                    if c == open_ch:
-                        lvl += 1
-                    elif c == close_ch:
-                        lvl -= 1
-                        if lvl == 0:
-                            return s[start:idx+1]
-                return None
-            content = None
-            # 優先してリストを抽出
-            content = extract_balance(text, '[', ']')
-            if content is None:
-                # 次にオブジェクトを抽出
-                content = extract_balance(text, '{', '}')
-            # 抽出できなければ生テキストを使う
-            if content is None:
-                content = text
-            # JSONパース or Pythonリテラル評価
-            try:
-                new_pixels = json.loads(content)
-            except Exception:
-                new_pixels = ast.literal_eval(content)
-            # 安全にnumpy配列化: 一度整数型で読み込み、範囲をクリップしてuint8へ変換
-            arr_int = np.array(new_pixels, dtype=int)
-            # 負値や255超過の値を0-255にクランプ
-            arr_clamped = np.clip(arr_int, 0, 255)
-            arr_uint8 = arr_clamped.astype(np.uint8)
-            return arr_uint8
-        except Exception as e:
-            QMessageBox.critical(self, "AIブラシエラー", f"AIブラシ処理中にエラーが発生しました: {e}")
-            return None
-        finally:
-            self.statusBar().clearMessage()
+            palette = get_kmeans_palette(valid, n_colors)
+        except Exception:
+            palette = get_median_cut_palette(valid, n_colors)
+        # 透過色をパレットから除外
+        palette = [tuple(c) for c in palette if tuple(c) != tc]
+        # 各ピクセルを最も近い代表色に丸め込む
+        new_flat = flat.copy()
+        for idx, pix in enumerate(flat):
+            if mask[idx]:
+                new_flat[idx] = map_to_closest_color(pix, palette)
+        new_pixels = new_flat.reshape((h, w, 3)).astype(np.uint8)
+        # 履歴に追加
+        self.edit_history = self.edit_history[:self.history_position + 1]
+        self.edit_history.append(new_pixels.copy())
+        self.history_position += 1
+        # 更新
+        self.pixels_rounded_np = new_pixels
+        self.update_preview(custom_pixels=self.pixels_rounded_np)
+        self.statusBar().showMessage(f"全体AIブラシ: {n_colors} 色に変換しました", 3000)
     
     def pick_color_for_paint(self, color, dialog=None):
         """選択したドットの色をペイント色として設定"""
