@@ -1643,12 +1643,14 @@ def generate_connection_paths_between_islands(islands):
     
     connection_paths = set()
     
-    # 各島の代表点を選択（左上座標を使用）
+    # 各島の代表点を選択（左下座標を使用）：島底面をカバーするため下端を基準に連結
     representatives = []
     for island in islands:
-        # 左上の座標を代表点とする
+        # 左側（最小x）のセルを取得
         rep_x = min(pos[0] for pos in island)
-        rep_y = min(pos[1] for pos in island if pos[0] == rep_x)
+        # 左側列における最下部（最大y）を代表点とする
+        ys_at_x = [pos[1] for pos in island if pos[0] == rep_x]
+        rep_y = max(ys_at_x)
         representatives.append((rep_x, rep_y))
     
     print(f"    島の代表点: {representatives}")
@@ -1829,7 +1831,8 @@ def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, gri
         
         for world_x, world_y in building_world_positions:
             building = box(extents=[dot_size - wall_thickness, dot_size - wall_thickness, wall_height])
-            building.apply_translation([world_x, world_y, base_height + wall_height / 2])
+            # ビルを base_height 分下げる: Z 位置は壁高さの半分のみ
+            building.apply_translation([world_x, world_y, wall_height / 2])
             layer_blocks.append(building)
         
         # 5-2. ベース（底面プレート）を生成
