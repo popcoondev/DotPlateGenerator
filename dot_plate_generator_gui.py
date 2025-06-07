@@ -3745,7 +3745,18 @@ class DotPlateApp(QMainWindow):
         self.global_brush_btn.setMinimumWidth(80)
         self.global_brush_btn.clicked.connect(self.handle_global_brush)
         mode_toolbar.addWidget(self.global_brush_btn)
-        
+        # 全色ワントーン明るく/暗く
+        self.lighten_btn = QPushButton("明るく")
+        self.lighten_btn.setToolTip("プレビュー内の全色をワントーン明るくします")
+        self.lighten_btn.setMinimumWidth(60)
+        self.lighten_btn.clicked.connect(self.handle_lighten_all)
+        mode_toolbar.addWidget(self.lighten_btn)
+        self.darken_btn = QPushButton("暗く")
+        self.darken_btn.setToolTip("プレビュー内の全色をワントーン暗くします")
+        self.darken_btn.setMinimumWidth(60)
+        self.darken_btn.clicked.connect(self.handle_darken_all)
+        mode_toolbar.addWidget(self.darken_btn)
+
         color_toolbar = QHBoxLayout()
         color_toolbar.addWidget(self.color_pick_btn)
         color_toolbar.addWidget(eyedropper_btn)
@@ -4598,7 +4609,42 @@ class DotPlateApp(QMainWindow):
         self.pixels_rounded_np = new_pixels
         self.update_preview(custom_pixels=self.pixels_rounded_np)
         self.statusBar().showMessage(f"全体AIブラシ: {n_colors} 色に変換しました", 3000)
-    
+
+    def handle_lighten_all(self):
+        """プレビュー内の全色をワントーン明るくする"""
+        if self.pixels_rounded_np is None:
+            return
+        # 履歴保存
+        self.save_edit_history()
+        pix = self.pixels_rounded_np
+        tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
+        # 明るくする増分
+        step = 16
+        new_pix = pix.copy().astype(int)
+        mask = ~(np.all(pix == tc, axis=2))
+        new_pix[mask] = np.clip(new_pix[mask] + step, 0, 255)
+        new_pix = new_pix.astype(np.uint8)
+        self.pixels_rounded_np = new_pix
+        self.update_preview(custom_pixels=new_pix)
+        self.statusBar().showMessage("全色をワントーン明るくしました", 3000)
+
+    def handle_darken_all(self):
+        """プレビュー内の全色をワントーン暗くする"""
+        if self.pixels_rounded_np is None:
+            return
+        # 履歴保存
+        self.save_edit_history()
+        pix = self.pixels_rounded_np
+        tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
+        step = 16
+        new_pix = pix.copy().astype(int)
+        mask = ~(np.all(pix == tc, axis=2))
+        new_pix[mask] = np.clip(new_pix[mask] - step, 0, 255)
+        new_pix = new_pix.astype(np.uint8)
+        self.pixels_rounded_np = new_pix
+        self.update_preview(custom_pixels=new_pix)
+        self.statusBar().showMessage("全色をワントーン暗くしました", 3000)
+
     def pick_color_for_paint(self, color, dialog=None):
         """選択したドットの色をペイント色として設定"""
         self.current_paint_color = color
