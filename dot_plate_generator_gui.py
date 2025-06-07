@@ -3626,6 +3626,9 @@ class DotPlateApp(QMainWindow):
         self.layer_refresh_button.setToolTip("最新のドットデータでレイヤー設定を更新します")
         self.layer_refresh_button.clicked.connect(self.update_layer_controls)
         layer_group_layout.addWidget(self.layer_refresh_button)
+        # 現在プレビューに使用されている色数を表示
+        self.color_count_label = QLabel("使用色数: 0色")
+        layer_group_layout.addWidget(self.color_count_label)
         # レイヤーの色を明度でソート
         sort_layout = QHBoxLayout()
         asc_btn = QPushButton("明度昇順")
@@ -5479,9 +5482,13 @@ class DotPlateApp(QMainWindow):
             self.layer_heights = {}
         # Collect unique colors excluding transparent (black)
         if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+            # 現在のプレビューで使用されている色数をカウント (透過色は除外)
             arr = self.pixels_rounded_np.reshape(-1, 3)
+            tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
             counts = Counter([tuple(c) for c in arr])
-            present = [color for color, _ in counts.most_common() if color != (0, 0, 0)]
+            present = [color for color, _ in counts.most_common() if color != tc]
+            # ラベルを更新
+            self.color_count_label.setText(f"使用色数: {len(present)}色")
             # Initialize or update order: keep existing order, append new
             if not hasattr(self, 'layer_color_order') or not self.layer_color_order:
                 self.layer_color_order = present.copy()
