@@ -3565,6 +3565,13 @@ class DotPlateApp(QMainWindow):
         self.param_export_button = QPushButton("STLをエクスポート")
         self.param_export_button.clicked.connect(self.export_stl)
         param_layout.addWidget(self.param_export_button)
+        # プレビュー画像保存ボタン
+        self.param_export_image_button = QPushButton("プレビュー画像を保存")
+        self.param_export_image_button.setToolTip(
+            "透過背景（市松模様）込みで、STLと同じサイズのプレビュー画像をPNG保存します"
+        )
+        self.param_export_image_button.clicked.connect(self.export_preview_image)
+        param_layout.addWidget(self.param_export_image_button)
 
         # レイアウトに追加
         param_layout.addLayout(color_algo_layout)
@@ -6224,7 +6231,45 @@ class DotPlateApp(QMainWindow):
                 import traceback
                 traceback.print_exc()
                 self.input_label.setText(f"STL生成エラー: {str(e)}")
-    
+
+    def export_preview_image(self):
+        """プレビュー中のドット絵を透過背景込みでSTLと同じサイズの画像として保存"""
+        # 必要条件チェック
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            QMessageBox.warning(self, "プレビュー画像保存エラー", "先にプレビューを生成してください。")
+            return
+        # 保存先選択
+        path, _ = QFileDialog.getSaveFileName(self, "プレビュー画像を保存", "preview.png", "PNG画像 (*.png)")
+        if not path:
+            return
+        # DPI入力
+        dpi, ok = QInputDialog.getInt(self, "画像解像度(DPI)", "DPIを入力してください:", 300, 1, 2400)
+        if not ok:
+            return
+        # パラメータ取得
+        params = {key: spin.value() for key, spin in self.controls.items()}
+        grid_size = self.current_grid_size
+        dot_size_mm = float(params.get("Dot Size", 1.0))
+        # 1インチ=25.4mmとしてピクセル数を計算
+        px_per_mm = dpi / 25.4
+        cell_px = max(1, int(round(dot_size_mm * px_per_mm)))
+        # プレビュー画像生成 (checkerboard背景込み)
+        try:
+            img = generate_preview_image(
+                self.image_path,
+                grid_size,
+                int(params.get("Color Step", 1)),
+                int(params.get("Top Colors", 256)),
+                zoom_factor=cell_px,
+                custom_pixels=self.pixels_rounded_np
+            )
+            # 保存
+            # 保存時にDPIを埋め込む
+            img.save(path, dpi=(dpi, dpi))
+            self.input_label.setText(f"{path} にプレビュー画像を保存しました")
+        except Exception as e:
+            QMessageBox.critical(self, "プレビュー画像保存エラー", f"画像保存中にエラーが発生しました: {e}")
+        
     def show_stl_preview(self, mesh):
         """メインウィンドウにSTLプレビューを表示し、別スレッドで画像も保存"""
         try:
