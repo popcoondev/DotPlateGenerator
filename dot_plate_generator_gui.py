@@ -1834,6 +1834,31 @@ def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, gri
             # ビルを base_height 分下げる: Z 位置は壁高さの半分のみ
             building.apply_translation([world_x, world_y, wall_height / 2])
             layer_blocks.append(building)
+        # 5-1b. 斜め隣接するドット間をコネクトする小ビルを配置
+        connector_size = dot_size / 5.0
+        connector_height = base_height
+        # 対角方向の隣接チェック (右上・右下)
+        positions_set = set(grid_positions)
+        diag_pairs = set()
+        for x, y in grid_positions:
+            for dx, dy in ((1, 1), (1, -1)):
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in positions_set:
+                    # 一意にペア化
+                    pair = tuple(sorted(((x, y), (nx, ny))))
+                    diag_pairs.add(pair)
+        # コネクタ生成
+        for (x1, y1), (x2, y2) in diag_pairs:
+            # グリッド→ワールド座標変換
+            wx1 = x1 * dot_size + dot_size / 2.0
+            wy1 = (grid_size - 1 - y1) * dot_size + dot_size / 2.0
+            wx2 = x2 * dot_size + dot_size / 2.0
+            wy2 = (grid_size - 1 - y2) * dot_size + dot_size / 2.0
+            cx = (wx1 + wx2) / 2.0
+            cy = (wy1 + wy2) / 2.0
+            conn = box(extents=[connector_size, connector_size, connector_height])
+            conn.apply_translation([cx, cy, connector_height / 2.0])
+            layer_blocks.append(conn)
         
         # 5-2. ベース（底面プレート）を生成
         base_world_positions = convert_grid_to_world_coordinates(
