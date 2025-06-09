@@ -1857,6 +1857,14 @@ def generate_color_separated_layers_stl(pixels_rounded_np, output_base_path, gri
             cx = (wx1 + wx2) / 2.0
             cy = (wy1 + wy2) / 2.0
             conn = box(extents=[connector_size, connector_size, connector_height])
+            # 45度回転して菱形(ダイヤモンド)にする
+            try:
+                from trimesh.transformations import rotation_matrix
+                angle = np.deg2rad(45)
+                R = rotation_matrix(angle, [0, 0, 1])
+                conn.apply_transform(R)
+            except Exception:
+                pass
             conn.apply_translation([cx, cy, connector_height / 2.0])
             layer_blocks.append(conn)
         
