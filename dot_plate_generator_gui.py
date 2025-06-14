@@ -3604,6 +3604,11 @@ class DotPlateApp(QMainWindow):
             "透過背景（市松模様）込みで、STLと同じサイズのプレビュー画像をPNG保存します"
         )
         self.param_export_image_button.clicked.connect(self.export_preview_image)
+        # MRPAF形式でピクセルデータを保存
+        self.param_export_mrpaf_button = QPushButton("MRPAFをエクスポート")
+        self.param_export_mrpaf_button.setToolTip("プレビュー中のピクセルデータをMRPAF形式で保存します")
+        self.param_export_mrpaf_button.clicked.connect(self.export_mrpaf)
+        param_layout.addWidget(self.param_export_mrpaf_button)
         param_layout.addWidget(self.param_export_image_button)
 
         # レイアウトに追加
@@ -6303,6 +6308,87 @@ class DotPlateApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "プレビュー画像保存エラー", f"画像保存中にエラーが発生しました: {e}")
         
+    def export_mrpaf(self):
+        """プレビュー中のピクセルデータをMRPAF形式で保存"""
+        # プレビューが生成されているかチェック
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            QMessageBox.warning(self, "MRPAF保存エラー", "先にプレビューを生成してください。")
+            return
+        # 保存先ファイル選択
+        path, _ = QFileDialog.getSaveFileName(self, "MRPAFを保存", "image.mrpaf", "MRPAFファイル (*.mrpaf *.json)")
+        if not path:
+            return
+        # データ準備
+        import datetime
+        grid_h, grid_w, _ = self.pixels_rounded_np.shape
+        dot_size = float(self.controls.get("Dot Size", QDoubleSpinBox()).value())
+        # 透過色
+        tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
+        # パレット作成
+        flat = self.pixels_rounded_np.reshape(-1, 3)
+        seen = []
+        for pix in map(tuple, flat):
+            if pix not in seen:
+                seen.append(pix)
+        palette = []
+        index_map = {}
+        for i, pix in enumerate(seen):
+            # numpy.uint8 型を Python int に変換
+            r_i, g_i, b_i = int(pix[0]), int(pix[1]), int(pix[2])
+            a_i = 0 if pix == tc else 255
+            hexcode = f"#{r_i:02X}{g_i:02X}{b_i:02X}{a_i:02X}"
+            palette.append({"id": i, "hex": hexcode, "rgb": [r_i, g_i, b_i, a_i]})
+            index_map[pix] = i
+        # ピクセルインデックス化
+        data = []
+        for y in range(grid_h):
+            row = []
+            for x in range(grid_w):
+                pix = tuple(int(c) for c in self.pixels_rounded_np[y, x])
+                row.append(index_map.get(pix, 0))
+            data.append(row)
+        # JSON組み立て
+        mrpaf = {
+            "format": "MRPAF",
+            "version": "1.1",
+            "metadata": {
+                "tool": {"name": "DotPlateGenerator", "version": "1.0"},
+                "created": datetime.datetime.utcnow().isoformat() + 'Z'
+            },
+            "canvas": {
+                "baseWidth": grid_w,
+                "baseHeight": grid_h,
+                "pixelUnit": dot_size,
+                "backgroundColor": f"#{tc[0]:02X}{tc[1]:02X}{tc[2]:02X}00"
+            },
+            "palette": palette,
+            "layers": [
+                {
+                    "id": 0,
+                    "name": "PreviewLayer",
+                    "type": "raster",
+                    "visible": True,
+                    "locked": False,
+                    "opacity": 1.0,
+                    "blending": {"mode": "normal", "resolution": "target", "interpolation": "nearest"},
+                    "resolution": {"pixelArraySize": {"width": grid_w, "height": grid_h},
+                                     "scale": 1, "effectiveSize": {"width": grid_w, "height": grid_h}},
+                    "placement": {"x": 0, "y": 0, "width": grid_w, "height": grid_h,
+                                  "unit": "base", "allowSubPixel": False},
+                    "viewport": {"x": 0, "y": 0, "width": grid_w, "height": grid_h},
+                    "pixels": {"encoding": "array", "data": data}
+                }
+            ],
+            "animations": {},
+            "resources": {}
+        }
+        # 保存
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(mrpaf, f, ensure_ascii=False, indent=2)
+            QMessageBox.information(self, "保存完了", f"{path} にMRPAFファイルを保存しました。")
+        except Exception as e:
+            QMessageBox.critical(self, "MRPAF保存エラー", f"保存中にエラーが発生しました: {e}")
     def show_stl_preview(self, mesh):
         """メインウィンドウにSTLプレビューを表示し、別スレッドで画像も保存"""
         try:
