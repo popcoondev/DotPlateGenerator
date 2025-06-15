@@ -3784,6 +3784,14 @@ class DotPlateApp(QMainWindow):
         mode_toolbar.addWidget(bucket_mode_btn)
         mode_toolbar.addWidget(select_mode_btn)
         mode_toolbar.addWidget(self.ai_brush_btn)
+        # AIブラシ閾値設定
+        threshold_label = QLabel("AIしきい値:")
+        mode_toolbar.addWidget(threshold_label)
+        self.ai_threshold_spin = QSpinBox()
+        self.ai_threshold_spin.setRange(0, 255)
+        self.ai_threshold_spin.setValue(30)
+        self.ai_threshold_spin.setToolTip("AIブラシで同色判定する距離のしきい値")
+        mode_toolbar.addWidget(self.ai_threshold_spin)
         # 全体AIブラシ: プレビュー内の特徴色を指定色数に丸め込む
         self.global_brush_btn = QPushButton("全体AIブラシ")
         self.global_brush_btn.setToolTip("プレビュー内の特徴色を指定色数に丸め込む")
@@ -4593,8 +4601,8 @@ class DotPlateApp(QMainWindow):
         sel = np.array(selected_color, dtype=int)
         # 各ピクセルとの距離（Euclid）を計算
         diff = np.linalg.norm(pixels.astype(int) - sel[None, None, :], axis=2)
-        # 類似色検出の閾値（調整可能）
-        threshold = 30
+        # 類似色検出の閾値（調整可能: AIしきい値スピンボックスの値を使用）
+        threshold = int(self.ai_threshold_spin.value())
         # マスクを作成
         mask = diff <= threshold
         # 類似色がない場合は通知して終了
