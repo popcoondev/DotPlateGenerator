@@ -295,7 +295,36 @@ def get_octree_palette(pixels, num_colors):
         # エラーが発生した場合はMedian Cut法にフォールバック
         print(f"オクトツリー法でエラーが発生したため、Median Cut法を使用します: {str(e)}")
         return get_median_cut_palette(pixels, num_colors)
+ 
+def floyd_steinberg_dither_pil(img, palette):
+    """
+    PIL.Image と固定パレットによる Floyd-Steinberg ディザリング
+    img     : PIL.Image (RGB)
+    palette : list of (r,g,b) tuples
+    戻り値  : PIL.Image (RGB)
+    """
+    arr = np.array(img, dtype=np.float32)
+    h, w, _ = arr.shape
+    out = np.zeros_like(arr)
+    pal = np.array(palette, dtype=np.float32)
+    for y in range(h):
+        for x in range(w):
+            old = arr[y, x]
+            # 最近色検索
+            diffs = pal - old[None, :]
+            idx = np.argmin(np.sum(diffs * diffs, axis=1))
+            new = pal[idx]
+            out[y, x] = new
+            err = old - new
+            # 誤差拡散
+            if x+1 < w:      arr[y,   x+1] += err * (7/16)
+            if y+1 < h and x>0: arr[y+1, x-1] += err * (3/16)
+            if y+1 < h:      arr[y+1, x  ] += err * (5/16)
+            if y+1 < h and x+1<w: arr[y+1, x+1] += err * (1/16)
+    out = np.clip(out, 0, 255).astype(np.uint8)
+    return Image.fromarray(out, mode='RGB')
 
+FIXED_PALETTE = []  # グローバル固定パレット格納
 def generate_preview_image(image_path, grid_size, color_step, top_color_limit, zoom_factor=10, 
                        custom_pixels=None, highlight_pos=None, hover_pos=None, color_algo="simple", highlight_color=None):
     """
@@ -363,11 +392,24 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
             # オクトツリー法
             palette = get_octree_palette(pixels, top_color_limit)
             pixels_rounded = [map_to_closest_color(c, palette) for c in pixels]
-            
+        elif color_algo == "fixed_palette":
+            # 固定パレット + Floyd-Steinberg ディザリング
+            global FIXED_PALETTE
+            if not FIXED_PALETTE:
+                # パレット未設定なら通常量子化にフォールバック
+                pixels_normalized = normalize_colors(pixels, color_step)
+                colors = [tuple(c) for c in pixels_normalized]
+                color_counts = Counter(colors)
+                top_colors = [c for c, _ in color_counts.most_common(top_color_limit)]
+                pixels_rounded = [map_to_closest_color(c, top_colors) for c in colors]
+            else:
+                # ディザリング適用
+                dithered = floyd_steinberg_dither_pil(img_resized, FIXED_PALETTE)
+                flat = np.array(dithered).reshape(-1, 3)
+                pixels_rounded = [tuple(c) for c in flat]
         elif color_algo == "none":
             # 減色なし - 元の色をそのまま使用
             pixels_rounded = pixels.tolist()  # NumPy配列をリストに変換
-            
         else:
             # デフォルトは単純アルゴリズム
             pixels_normalized = normalize_colors(pixels, color_step)
@@ -3214,6 +3256,9 @@ class DotPlateApp(QMainWindow):
                     self.palette_colors.append((c.red(), c.green(), c.blue()))
             except:
                 pass
+        # グローバル固定パレットを更新
+        global FIXED_PALETTE
+        FIXED_PALETTE = self.palette_colors.copy()
         # Initialize layer settings defaults
         self.layer_heights = {}
         self.layer_color_order = []
@@ -3325,6 +3370,7 @@ class DotPlateApp(QMainWindow):
             "K-means法 (K-means)", 
             "オクトツリー法 (Octree)",
             "トゥーンアニメ風 (Toon)",
+            "固定パレット (Fixed Palette)",
             "減色なし (No Quantization)"
         ])
         self.color_algo_combo.setToolTip(
@@ -3334,6 +3380,7 @@ class DotPlateApp(QMainWindow):
             "・K-means法: 機械学習ベースの色のクラスタリング\n"
             "・オクトツリー法: 色空間の階層的分割による高品質な減色\n"
             "・トゥーンアニメ風: 鮮やかな色とはっきりした色の差を持つアニメ風の配色\n"
+            "・固定パレット: Floyd–Steinberg ディザリングで指定パレットに減色（色ムラ軽減）\n"
             "・減色なし: 元画像の色をそのまま使用（高品質、多色数）"
         )
         self.color_algo_combo.currentIndexChanged.connect(self.on_color_algo_changed)
@@ -4996,24 +5043,26 @@ class DotPlateApp(QMainWindow):
     def on_color_algo_changed(self, index):
         """減色アルゴリズムが変更されたときの処理"""
         algo_map = {
-            0: "simple",     # 単純量子化
-            1: "median_cut", # メディアンカット法
-            2: "kmeans",     # K-means法
-            3: "octree",     # オクトツリー法
-            4: "toon",       # トゥーンアニメ風
-            5: "none"        # 減色なし
+            0: "simple",          # 単純量子化
+            1: "median_cut",      # メディアンカット法
+            2: "kmeans",          # K-means法
+            3: "octree",          # オクトツリー法
+            4: "toon",            # トゥーンアニメ風
+            5: "fixed_palette",   # 固定パレットディザリング
+            6: "none"             # 減色なし
         }
         
         self.current_color_algo = algo_map.get(index, "simple")
         
         # ステータスメッセージ更新
         status_messages = {
-            "simple": "単純量子化アルゴリズムを使用します",
-            "median_cut": "メディアンカット法（色空間分割による減色）を使用します",
-            "kmeans": "K-means法（機械学習ベースのクラスタリング）を使用します",
-            "toon": "トゥーンアニメ風の鮮やかな色使いで減色します",
-            "none": "減色せず元画像の色をそのまま使用します",
-            "octree": "オクトツリー法（階層的色空間分割）を使用します"
+            "simple":       "単純量子化アルゴリズムを使用します",
+            "median_cut":   "メディアンカット法（色空間分割による減色）を使用します",
+            "kmeans":       "K-means法（機械学習ベースのクラスタリング）を使用します",
+            "octree":       "オクトツリー法（階層的色空間分割）を使用します",
+            "toon":         "トゥーンアニメ風の鮮やかな色使いで減色します",
+            "fixed_palette":"固定パレットディザリングで減色します",
+            "none":         "減色せず元画像の色をそのまま使用します"
         }
         
         self.statusBar().showMessage(status_messages.get(self.current_color_algo, "減色アルゴリズムを変更しました"))
