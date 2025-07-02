@@ -350,8 +350,12 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
         pixels_array = custom_pixels
         grid_h, grid_w = pixels_array.shape[:2]
     else:
-        # 画像からピクセルデータを生成
-        img = Image.open(image_path).convert("RGB")
+        # 画像または MRPAF からピクセルデータを生成
+        ext = os.path.splitext(image_path)[1].lower()
+        if ext == ".mrpaf":
+            img = load_mrpaf(image_path).convert("RGB")
+        else:
+            img = Image.open(image_path).convert("RGB")
         orig_w, orig_h = img.size
         # grid_size を幅とみなし、高さをアスペクト比から算出
         grid_w = grid_size
@@ -740,6 +744,102 @@ def generate_color_table_html(self, color_stats):
     """
     
     return table_html
+   
+# -------------------------------
+# MRPAF loader and helper functions
+# -------------------------------
+def decode_rle(rle_string, width, height):
+    rows = rle_string.split("|")
+    arr = []
+    for row_str in rows:
+        row = []
+        for run in row_str.split(","):
+            if not run:
+                continue
+            val, cnt = run.split(":")
+            row.extend([int(val)] * int(cnt))
+        arr.append(row)
+    if len(arr) < height:
+        arr += [[0] * width for _ in range(height - len(arr))]
+    arr = [r[:width] + [0] * max(0, width - len(r)) for r in arr]
+    return arr[:height]
+
+def load_mrpaf(path):
+    data = json.load(open(path, "r", encoding="utf-8"))
+    canvas_info = data.get("canvas", {})
+    base_w = int(canvas_info.get("baseWidth", 0))
+    base_h = int(canvas_info.get("baseHeight", 0))
+    palette = {}
+    for entry in data.get("palette", []):
+        pid = entry.get("id")
+        hexstr = entry.get("hex", "#00000000").lstrip("#")
+        if len(hexstr) == 8:
+            r = int(hexstr[0:2], 16)
+            g = int(hexstr[2:4], 16)
+            b = int(hexstr[4:6], 16)
+            a = int(hexstr[6:8], 16)
+        elif len(hexstr) == 6:
+            r = int(hexstr[0:2], 16)
+            g = int(hexstr[2:4], 16)
+            b = int(hexstr[4:6], 16)
+            a = 255
+        else:
+            r = g = b = a = 0
+        palette[pid] = (r, g, b, a)
+    base_img = Image.new("RGBA", (base_w, base_h), (0, 0, 0, 0))
+    for layer in sorted(data.get("layers", []), key=lambda l: l.get("id", 0)):
+        res = layer.get("resolution", {})
+        w_hi = int(res.get("pixelArraySize", {}).get("width", 0))
+        h_hi = int(res.get("pixelArraySize", {}).get("height", 0))
+        scale = float(res.get("scale", 1.0))
+        pix = layer.get("pixels")
+        if not pix or (pix.get("encoding") is None and pix.get("format") is None):
+            continue
+        fmt_field = pix.get("encoding") or pix.get("format")
+        enc = fmt_field.lower() if isinstance(fmt_field, str) else fmt_field
+        if enc == "array":
+            flat = pix.get("data", []) or []
+            arr = []
+            for i in range(h_hi):
+                row = []
+                for j in range(w_hi):
+                    idx = i * w_hi + j
+                    val = flat[idx] if idx < len(flat) else None
+                    row.append(val if isinstance(val, int) else 0)
+                arr.append(row)
+        elif enc == "rle":
+            arr = decode_rle(pix.get("data", ""), w_hi, h_hi)
+        elif enc == "sparse":
+            dims = pix.get("dimensions", {"width": w_hi, "height": h_hi})
+            w_hi = int(dims.get("width", w_hi))
+            h_hi = int(dims.get("height", h_hi))
+            default = pix.get("defaultValue", 0)
+            arr = [[default] * w_hi for _ in range(h_hi)]
+            for item in pix.get("data", []):
+                x = item.get("x", 0)
+                y = item.get("y", 0)
+                col = item.get("color", default)
+                if 0 <= x < w_hi and 0 <= y < h_hi:
+                    arr[y][x] = col
+        else:
+            raise NotImplementedError(f"Unsupported encoding: {enc}")
+        img_hi = Image.new("RGBA", (w_hi, h_hi))
+        px_hi = img_hi.load()
+        for yy in range(h_hi):
+            for xx in range(w_hi):
+                cid = arr[yy][xx] if yy < len(arr) and xx < len(arr[yy]) else 0
+                px_hi[xx, yy] = palette.get(cid, (0, 0, 0, 0))
+        if scale != 1.0 and scale > 0:
+            w_lo = int(round(w_hi / scale))
+            h_lo = int(round(h_hi / scale))
+            img_lo = img_hi.resize((w_lo, h_lo), resample=Image.NEAREST)
+        else:
+            img_lo = img_hi
+        place = layer.get("placement", {})
+        x0 = place.get("x", 0)
+        y0 = place.get("y", 0)
+        base_img.alpha_composite(img_lo, dest=(int(x0), int(y0)))
+    return base_img
 
 def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                            wall_thickness, wall_height, base_height,
@@ -747,7 +847,12 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
                            wall_color=(255, 255, 255), # 壁の色（デフォルトは白）
                            merge_same_color=False,     # 同じ色のドット間の内壁を省略するオプション
                            return_colors=False):
-    img = Image.open(image_path).convert("RGB")
+    # サポート: MRPAF ファイル読み込み
+    ext = os.path.splitext(image_path)[1].lower()
+    if ext == ".mrpaf":
+        img = load_mrpaf(image_path).convert("RGB")
+    else:
+        img = Image.open(image_path).convert("RGB")
     img_resized = img.resize((grid_size, grid_size), resample=Image.NEAREST)
     pixels = np.array(img_resized).reshape(-1, 3)
     pixels_normalized = normalize_colors(pixels, color_step)
@@ -3623,7 +3728,10 @@ class DotPlateApp(QMainWindow):
             
             def make_slider_changed(label, is_int, slider_factor):
                 def slider_changed(value):
-                    self.controls[label].setValue(value / slider_factor)
+                    if is_int:
+                        self.controls[label].setValue(int(value / slider_factor))
+                    else:
+                        self.controls[label].setValue(value / slider_factor)
                     # Clear pixel data when changing parameters that affect color quantization
                     if label in ("Grid Size", "Color Step", "Top Colors") and hasattr(self, "pixels_rounded_np"):
                         self.pixels_rounded_np = None
@@ -5010,21 +5118,54 @@ class DotPlateApp(QMainWindow):
         return super().event(event)
     
     def select_image(self):
+        # 画像ファイルまたは MRPAF ファイルを選択可能にする
         path, _ = QFileDialog.getOpenFileName(
             self,
             "画像を開く",
             "",
-            "画像ファイル (*.png *.jpg *.jpeg *.gif *.bmp)"
+            "画像ファイル (*.png *.jpg *.jpeg *.gif *.bmp *.mrpaf);;PNG (*.png);;JPEG (*.jpg *.jpeg);;その他 (*.*)"
         )
         if path:
             self.image_path = path
             self.input_label.setText(path)
-            # オリジナル画像をロードしてズーム適用
-            try:
-                self.original_pixmap_source = QPixmap(self.image_path)
-                self.applyOriginalZoom()
-            except Exception:
-                pass
+            # 元画像をロードしてズーム適用 (.mrpaf対応)
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".mrpaf":
+                try:
+                    # MRPAFファイルから画像を生成
+                    pil_img = load_mrpaf(path)
+                    buf = BytesIO()
+                    pil_img.save(buf, format="PNG")
+                    qimg = QImage()
+                    qimg.loadFromData(buf.getvalue())
+                    self.original_pixmap_source = QPixmap.fromImage(qimg)
+                    self.applyOriginalZoom()
+                except Exception as e:
+                    print(f"MRPAF読み込みエラー: {e}")
+            elif ext == ".gif":
+                try:
+                    # GIFファイルをPILで読み込み（最初のフレーム）
+                    pil_img = Image.open(path)
+                    pil_img = pil_img.convert("RGBA")
+                    buf = BytesIO()
+                    pil_img.save(buf, format="PNG")
+                    qimg = QImage()
+                    qimg.loadFromData(buf.getvalue())
+                    self.original_pixmap_source = QPixmap.fromImage(qimg)
+                    self.applyOriginalZoom()
+                except Exception as e:
+                    print(f"GIF読み込みエラー: {e}")
+                    try:
+                        self.original_pixmap_source = QPixmap(self.image_path)
+                        self.applyOriginalZoom()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.original_pixmap_source = QPixmap(self.image_path)
+                    self.applyOriginalZoom()
+                except Exception:
+                    pass
             # 画像を読み込んだらグリッド幅を自動検出（幅を優先）
             try:
                 img = Image.open(path)
