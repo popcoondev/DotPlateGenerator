@@ -3776,7 +3776,7 @@ class DotPlateApp(QMainWindow):
         mode_label = QLabel("STL出力モード:")
         mode_label.setToolTip("出力するSTLの種類を選択")
         self.stl_mode_combo = QComboBox()
-        # STL出力モード: 0=ドットプレート, 1=ドットプレート (同色内壁省略), 2=チェックボード (市松模様), 3=色レイヤーモード, 4=レイヤースタックモード, 5=プラモデル組み立て式モード, 6=色別レイヤー分離出力モード
+        # STL出力モード: 0=ドットプレート, 1=ドットプレート (同色内壁省略), 2=チェックボード (市松模様), 3=色レイヤーモード, 4=レイヤースタックモード, 5=プラモデル組み立て式モード, 6=色別レイヤー分離出力モード, 7=ハイブリッドモード
         self.stl_mode_combo.addItems([
             "ドットプレート",
             "ドットプレート (同色内壁省略)",
@@ -3784,7 +3784,8 @@ class DotPlateApp(QMainWindow):
             "色レイヤーモード",
             "レイヤースタックモード",
             "プラモデル組み立て式モード",
-            "色別レイヤー分離出力モード"
+            "色別レイヤー分離出力モード",
+            "ハイブリッドモード"  # 7: 同色内壁省略 + 色レイヤー化ハイブリッド
         ])
         self.stl_mode_combo.setToolTip("STL出力モードを選択")
         # 選択値を保持
@@ -4189,6 +4190,8 @@ class DotPlateApp(QMainWindow):
         self.layer_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.layer_dock.setObjectName("LayerDock")
         self.addDockWidget(Qt.LeftDockWidgetArea, self.layer_dock)
+        # ハイブリッドモード用の有効色フラグ
+        self.layer_hybrid_enable = {}
         # タブ化：左側のファイル／パラメータ／レイヤー設定をタブでまとめる
         self.tabifyDockWidget(self.file_dock, self.param_dock)
         self.tabifyDockWidget(self.file_dock, self.layer_dock)
@@ -5803,6 +5806,13 @@ class DotPlateApp(QMainWindow):
                 pixmap.fill(QColor(*color))
                 label.setPixmap(pixmap)
                 row_layout.addWidget(label)
+                # Hybrid enable checkbox
+                if not color in self.layer_hybrid_enable:
+                    self.layer_hybrid_enable[color] = False
+                cb = QCheckBox("色レイヤー化")
+                cb.setChecked(self.layer_hybrid_enable.get(color, False))
+                cb.stateChanged.connect(lambda st, c=color: self.layer_hybrid_enable.__setitem__(c, st == Qt.Checked))
+                row_layout.addWidget(cb)
                 # Show palette mix ratios for this layer color
                 mix = self.get_palette_mix(color)
                 for mc in mix:
@@ -6296,7 +6306,87 @@ class DotPlateApp(QMainWindow):
                     self.input_label.setText(f"色別レイヤー分離STL生成エラー: {str(e)}")
             return
 
-        # 通常モード: ドットプレートSTL出力
+        # ハイブリッドモード: ドットプレート (同色内壁省略) + 色レイヤーモード の複合
+        # インデックス7
+        if getattr(self, 'stl_mode', 0) == 7:
+            # ファイル選択
+            out_path, _ = QFileDialog.getSaveFileName(self, "ハイブリッドSTLを保存", "hybrid.stl", "STLファイル (*.stl)")
+            if not out_path:
+                return
+            params = {key: spin.value() for key, spin in self.controls.items()}
+            # カスタムピクセル配列の取得
+            arr_full = self.pixels_rounded_np if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None else None
+            if arr_full is None:
+                QMessageBox.warning(self, "エラー", "先にプレビューを生成してください。")
+                return
+            # 分割色リスト
+            off_colors = [c for c in self.layer_color_order if not self.layer_hybrid_enable.get(c, False)]
+            on_colors = [c for c in self.layer_color_order if self.layer_hybrid_enable.get(c, False)]
+            meshes = []
+            import tempfile, os
+            # ベース部 (OFF色) をドットプレート生成
+            # マスクOFF色を残し、他は透明化
+            mask_off = np.zeros_like(arr_full)
+            for y in range(arr_full.shape[0]):
+                for x in range(arr_full.shape[1]):
+                    if tuple(arr_full[y, x]) in off_colors:
+                        mask_off[y, x] = arr_full[y, x]
+                    else:
+                        mask_off[y, x] = (0, 0, 0)
+            # 一時PNG作成
+            tmp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            Image.fromarray(mask_off, mode='RGB').save(tmp_img.name)
+            # 一時STL作成
+            tmp_stl_off = tempfile.NamedTemporaryFile(suffix='.stl', delete=False)
+            # determine wall_color tuple
+            if isinstance(self.wall_color, QColor):
+                wc = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
+            else:
+                wc = tuple(self.wall_color)
+            mesh_off, _ = generate_dot_plate_stl(
+                tmp_img.name, tmp_stl_off.name,
+                int(params.get("Grid Size", 0)), float(params.get("Dot Size", 0.0)),
+                float(params.get("Wall Thickness", 0.0)), float(params.get("Wall Height", 0.0)),
+                float(params.get("Base Height", 0.0)),
+                1, 1000,
+                float(params.get("Out Thickness", 0.0)),
+                wall_color=(self.wall_color.red(), self.wall_color.green(), self.wall_color.blue()),
+                merge_same_color=True,
+                return_colors=True
+            )
+            meshes.append(mesh_off)
+            # クリーンアップオフ
+            tmp_img.close(); os.unlink(tmp_img.name)
+            tmp_stl_off.close(); os.unlink(tmp_stl_off.name)
+            # 色レイヤー部 (ON色) を生成 (壁厚0)
+            if on_colors:
+                mask_on = np.zeros_like(arr_full)
+                for y in range(arr_full.shape[0]):
+                    for x in range(arr_full.shape[1]):
+                        if tuple(arr_full[y, x]) in on_colors:
+                            mask_on[y, x] = arr_full[y, x]
+                        else:
+                            mask_on[y, x] = (0, 0, 0)
+                # 一時STLレイヤー生成
+                tmp_stl_on = tempfile.NamedTemporaryFile(suffix='.stl', delete=False)
+                # 高さパラメータの抽出
+                heights = {c: self.layer_heights.get(c, 0.0) for c in on_colors}
+                mesh_on = generate_layered_stl(
+                    mask_on,
+                    tmp_stl_on.name,
+                    int(params.get("Grid Size", 0)), float(params.get("Dot Size", 0.0)),
+                    float(params.get("Base Height", 0.0)),
+                    0.0, float(params.get("Wall Height", 0.0)),
+                    heights, on_colors
+                )
+                meshes.append(mesh_on)
+                tmp_stl_on.close(); os.unlink(tmp_stl_on.name)
+            # マージして出力
+            mesh = trimesh.util.concatenate(meshes)
+            mesh.export(out_path)
+            self.show_stl_preview(mesh)
+            self.input_label.setText(f"{out_path} にハイブリッドSTLをエクスポートしました")
+            return
         out_path, _ = QFileDialog.getSaveFileName(self, "STLを保存", "dot_plate.stl", "STLファイル (*.stl)")
         if out_path:
             params = {key: spin.value() for key, spin in self.controls.items()}
@@ -6319,7 +6409,6 @@ class DotPlateApp(QMainWindow):
                 # メッシュ生成（メッシュも返すように指定）
                 if custom_pixels is not None:
                     # カスタムピクセルからSTLを直接生成
-                    from PIL import Image
                     import tempfile
                     
                     # 一時ファイルに画像を保存
@@ -6390,7 +6479,6 @@ class DotPlateApp(QMainWindow):
                         # 現状の実装（すでに減色済みの場合はカスタムピクセルを使用）
                         if self.pixels_rounded_np is not None:
                             # 減色済みデータから一時画像を作成してSTL生成
-                            from PIL import Image
                             import tempfile
                             
                             # 一時ファイルに画像を保存
