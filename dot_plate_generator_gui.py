@@ -6047,6 +6047,8 @@ class DotPlateApp(QMainWindow):
         dialog.show()
 
     def export_stl(self):
+        # Ensure PIL Image is available
+        from PIL import Image
         if not self.image_path:
             self.input_label.setText("画像が選択されていません")
             return
