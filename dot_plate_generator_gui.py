@@ -3827,6 +3827,11 @@ class DotPlateApp(QMainWindow):
         self.layer_refresh_button.setToolTip("最新のドットデータでレイヤー設定を更新します")
         self.layer_refresh_button.clicked.connect(self.update_layer_controls)
         layer_group_layout.addWidget(self.layer_refresh_button)
+        # 色統合ボタン
+        self.merge_color_button = QPushButton("色統合")
+        self.merge_color_button.setToolTip("選択した色を統一します")
+        self.merge_color_button.clicked.connect(self.merge_selected_colors)
+        layer_group_layout.addWidget(self.merge_color_button)
         # 現在プレビューに使用されている色数を表示
         self.color_count_label = QLabel("使用色数: 0色")
         layer_group_layout.addWidget(self.color_count_label)
@@ -4187,6 +4192,8 @@ class DotPlateApp(QMainWindow):
         # レイヤー設定パネルをドッキング
         self.layer_dock = QDockWidget("レイヤー設定", self)
         self.layer_dock.setWidget(self.layer_group)
+        # 色統合機能用フラグ
+        self.layer_merge_enable = {}
         self.layer_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.layer_dock.setObjectName("LayerDock")
         self.addDockWidget(Qt.LeftDockWidgetArea, self.layer_dock)
@@ -5813,6 +5820,13 @@ class DotPlateApp(QMainWindow):
                 cb.setChecked(self.layer_hybrid_enable.get(color, False))
                 cb.stateChanged.connect(lambda st, c=color: self.layer_hybrid_enable.__setitem__(c, st == Qt.Checked))
                 row_layout.addWidget(cb)
+                # 色統合用チェックボックス
+                if color not in self.layer_merge_enable:
+                    self.layer_merge_enable[color] = False
+                cbm = QCheckBox("色統合")
+                cbm.setChecked(self.layer_merge_enable.get(color, False))
+                cbm.stateChanged.connect(lambda st, c=color: self.layer_merge_enable.__setitem__(c, st == Qt.Checked))
+                row_layout.addWidget(cbm)
                 # Show palette mix ratios for this layer color
                 mix = self.get_palette_mix(color)
                 for mc in mix:
@@ -5932,6 +5946,34 @@ class DotPlateApp(QMainWindow):
         self.layer_color_order.sort(key=lambda c: counts.get(c, 0), reverse=True)
         self.update_layer_controls()
         QMessageBox.information(self, "パス最適順", "レイヤー順序をパス数が多い順に並び替えました")
+    
+    def merge_selected_colors(self):
+        """色統合: チェックされたレイヤー色を1色に統一する"""
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            QMessageBox.warning(self, "エラー", "先にプレビューを生成してください。")
+            return
+        # 色選択ダイアログ
+        color = QColorDialog.getColor(parent=self, title="統一後の色を選択")
+        if not color.isValid():
+            return
+        target = (color.red(), color.green(), color.blue())
+        arr = self.pixels_rounded_np.copy()
+        # 統合対象の色を置換
+        for y in range(arr.shape[0]):
+            for x in range(arr.shape[1]):
+                pix = tuple(arr[y, x])
+                if self.layer_merge_enable.get(pix, False):
+                    arr[y, x] = target
+        # 履歴に追加
+        self.edit_history = self.edit_history[:self.history_position+1]
+        self.edit_history.append(arr.copy())
+        self.history_position = len(self.edit_history) - 1
+        # 更新
+        self.pixels_rounded_np = arr
+        # Update preview and layer controls to reflect new colors
+        self.update_preview(custom_pixels=arr)
+        self.update_layer_controls()
+        QMessageBox.information(self, "色統合", "選択された色を統一しました。プレビューと使用色数を更新しました。")
 
     def on_layer_reordered(self, parent, start, end, destination, row):
         """Update layer_color_order after drag-and-drop reordering."""
