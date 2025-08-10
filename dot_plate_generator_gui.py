@@ -3816,7 +3816,11 @@ class DotPlateApp(QMainWindow):
         # 内部移動を有効にし、アイテムをドラッグで並び替え
         self.layer_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.layer_list.setDefaultDropAction(Qt.MoveAction)
-        self.layer_list.setSelectionMode(QAbstractItemView.NoSelection)
+        # 複数選択とドラッグを有効化（Shift+クリックで範囲選択）
+        self.layer_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.layer_list.setDragEnabled(True)
+        self.layer_list.setAcceptDrops(True)
+        self.layer_list.setDropIndicatorShown(True)
         # 順序変更時にカラー順序を更新
         self.layer_list.model().rowsMoved.connect(self.on_layer_reordered)
         self.layer_scroll.setWidget(self.layer_list)
@@ -6394,7 +6398,7 @@ class DotPlateApp(QMainWindow):
                 float(params.get("Base Height", 0.0)),
                 1, 1000,
                 float(params.get("Out Thickness", 0.0)),
-                wall_color=(self.wall_color.red(), self.wall_color.green(), self.wall_color.blue()),
+                wall_color=wc,
                 merge_same_color=True,
                 return_colors=True
             )
