@@ -1,5 +1,5 @@
 # dot_plate_generator_gui.py
-# 必要ライブラリ: PyQt5, PIL, numpy, trimesh, shapely, skimage, scipy, matplotlib
+# 必要ライブラリ: PyQt5, PIL, numpy, trimesh, shapely, skimage, scipy, matplotlib, OpenCV (cv2)
 
 import sys
 import os
@@ -8,6 +8,7 @@ import pickle
 import base64
 import numpy as np
 from PIL import Image
+import cv2
 from collections import Counter
 from scipy.spatial import distance
 import trimesh
@@ -34,6 +35,65 @@ import openai  # OpenAI API for AIブラシ機能
 import ast
 import time
 import tempfile
+# for line-art conversion (using numpy channel swap; no OpenCV required)
+from skimage.morphology import skeletonize
+from skimage.feature import peak_local_max
+from skimage.segmentation import watershed
+from skimage.measure import regionprops
+# Embedded line-art conversion function (copied from coloring_book)
+def build_preview_and_svg(img, canny_lo=40, canny_hi=120,
+                          close_iter=3, dilate_iter=2,
+                          min_area_pct=0.0005, eps_ratio=0.0015):
+    """
+    Generate line-art preview (BGR), simplified contours, and region mask from BGR image.
+    """
+    # Grayscale + noise reduction
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.bilateralFilter(gray, 9, 50, 50)
+    gray = cv2.equalizeHist(gray)
+    # Canny edge detection
+    edges = cv2.Canny(gray, int(canny_lo), int(canny_hi))
+    # Morphological operations
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=int(close_iter))
+    dil = cv2.dilate(closed, kernel, iterations=int(dilate_iter))
+    # Skeletonization
+    skel = skeletonize((dil > 0).astype(np.uint8)).astype(np.uint8) * 255
+    # Invert + threshold
+    inv = cv2.bitwise_not(skel)
+    _, thresh = cv2.threshold(inv, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    # Distance transform + watershed
+    dist = cv2.distanceTransform(thresh, cv2.DIST_L2, 3)
+    local_max = peak_local_max(dist, min_distance=6, labels=thresh.astype(bool))
+    markers = np.zeros_like(dist, dtype=int)
+    for i, (y, x) in enumerate(local_max, start=1):
+        markers[y, x] = i
+    labels_ws = watershed(-dist, markers, mask=thresh.astype(bool))
+    # Filter small regions
+    min_area = (img.shape[0] * img.shape[1]) * float(min_area_pct)
+    mask_regions = np.zeros_like(labels_ws, dtype=np.uint8)
+    for r in regionprops(labels_ws):
+        if r.area >= min_area:
+            mask_regions[labels_ws == r.label] = 255
+    # Simplify contours
+    contours, _ = cv2.findContours(mask_regions, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    def simplify_contour(cnt):
+        peri = cv2.arcLength(cnt, True)
+        return cv2.approxPolyDP(cnt, float(eps_ratio) * peri, True)
+    simplified = [simplify_contour(c) for c in contours]
+    # Build preview image with mean region colors
+    preview = np.ones_like(img) * 255
+    nlabels, labels2 = cv2.connectedComponents(mask_regions)
+    for label_id in range(1, nlabels):
+        mask = (labels2 == label_id)
+        if not np.any(mask):
+            continue
+        mean_color = img[mask].mean(axis=0)
+        preview[mask] = mean_color
+    # Overlay edges
+    edges_for_overlay = cv2.dilate(skel, kernel, iterations=1)
+    preview[edges_for_overlay > 0] = (0, 0, 0)
+    return preview, simplified, mask_regions
 
 # Vedoをインポート (VTKベースの3D可視化ライブラリ)
 # Matplotlibを常に使用するように変更
@@ -1056,16 +1116,18 @@ def generate_dot_plate_stl(image_path, output_path, grid_size, dot_size,
 
 def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, base_height, wall_thickness, wall_height, layer_heights, layer_order):
     """Generate STL with per-color layer heights."""
+    # Determine actual grid dimensions from pixel array (height x width)
+    grid_h, grid_w = pixels_rounded_np.shape[:2]
     # Create base blocks for non-transparent pixels (exclude transparent color)
     blocks = []
     cumulative_z = base_height
     transparent_color = (0, 0, 0)
     # Base layer: for each pixel not transparent, add a block of base_height
-    for y in range(grid_size):
-        for x in range(grid_size):
+    for y in range(grid_h):
+        for x in range(grid_w):
             if tuple(pixels_rounded_np[y, x]) != transparent_color:
                 x0 = x * dot_size
-                y0 = (grid_size - 1 - y) * dot_size
+                y0 = (grid_h - 1 - y) * dot_size
                 base_block = box(extents=[dot_size, dot_size, base_height])
                 base_block.apply_translation([
                     x0 + dot_size / 2,
@@ -1084,14 +1146,15 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
         z0 = cumulative_z
         # Support region: fill under higher layers
         support_colors = colors[idx:]
-        mask_support = np.zeros((grid_size, grid_size), dtype=bool)
+        # Support region mask under this and higher layers
+        mask_support = np.zeros((grid_h, grid_w), dtype=bool)
         for sc in support_colors:
             sc_arr = np.array(sc, dtype=np.uint8)
             mask_support |= np.all(pixels_rounded_np == sc_arr, axis=2)
         # Add support blocks
         for y, x in np.argwhere(mask_support):
             x0 = x * dot_size
-            y0 = (grid_size - 1 - y) * dot_size
+            y0 = (grid_h - 1 - y) * dot_size
             block = box(extents=[dot_size, dot_size, h])
             block.apply_translation([x0 + dot_size/2, y0 + dot_size/2, z0 + h/2])
             blocks.append(block)
@@ -1101,15 +1164,15 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
         wt = wall_thickness
         for y, x in np.argwhere(mask_color):
             x0 = x * dot_size
-            y0 = (grid_size - 1 - y) * dot_size
-            y_center = y0 + dot_size/2
+            y0 = (grid_h - 1 - y) * dot_size
+            y_center = y0 + dot_size / 2
             # Left wall
             if x == 0 or not mask_color[y, x-1]:
                 w = box(extents=[wt, dot_size, wall_height])
                 w.apply_translation([x0 - wt/2, y_center, z0 + wall_height/2])
                 blocks.append(w)
             # Right wall
-            if x == grid_size-1 or not mask_color[y, x+1]:
+            if x == grid_w-1 or not mask_color[y, x+1]:
                 w = box(extents=[wt, dot_size, wall_height])
                 w.apply_translation([x0 + dot_size + wt/2, y_center, z0 + wall_height/2])
                 blocks.append(w)
@@ -1119,7 +1182,7 @@ def generate_layered_stl(pixels_rounded_np, output_path, grid_size, dot_size, ba
                 w.apply_translation([x0 + dot_size/2, y0 + dot_size + wt/2, z0 + wall_height/2])
                 blocks.append(w)
             # Bottom wall (negative Y direction)
-            if y == grid_size-1 or not mask_color[y+1, x]:
+            if y == grid_h-1 or not mask_color[y+1, x]:
                 w = box(extents=[dot_size, wt, wall_height])
                 w.apply_translation([x0 + dot_size/2, y0 - wt/2, z0 + wall_height/2])
                 blocks.append(w)
@@ -3770,6 +3833,14 @@ class DotPlateApp(QMainWindow):
         param_layout.addLayout(color_algo_layout)
         param_layout.addLayout(wall_color_layout)
         param_layout.addLayout(transparent_color_layout)
+        # 線画変換ボタン
+        lineart_layout = QHBoxLayout()
+        self.lineart_button = QPushButton("線画変換")
+        self.lineart_button.setToolTip("オリジナル画像を線画に変換します")
+        self.lineart_button.clicked.connect(self.convert_to_line_art)
+        lineart_layout.addWidget(self.lineart_button)
+        lineart_layout.addStretch()
+        param_layout.addLayout(lineart_layout)
         # 「同色内壁省略」オプションはSTL出力モードで切り替えます
         # STL出力モード選択 (ドットプレート or 市松模様)
         mode_layout = QHBoxLayout()
@@ -5194,6 +5265,42 @@ class DotPlateApp(QMainWindow):
                 self.preview_label.last_clicked_pos = None
             # プレビュー更新
             self.update_preview()
+    
+    def convert_to_line_art(self):
+        """オリジナル画像を線画に変換してプレビュー表示"""
+        if not hasattr(self, 'image_path') or not self.image_path:
+            QMessageBox.warning(self, "線画変換エラー", "先に画像を読み込んでください。")
+            return
+        try:
+            # プレビュー表示されている画像（ズーム適用済み）を使用して線画生成
+            pixmap = None
+            if hasattr(self.preview_label, 'pixmap') and self.preview_label.pixmap() is not None:
+                pixmap = self.preview_label.pixmap()
+            elif hasattr(self, 'original_pixmap_source'):
+                pixmap = self.original_pixmap_source
+            if pixmap:
+                # QPixmap -> QImage -> NumPy配列 (BGR)
+                qimg = pixmap.toImage().convertToFormat(QImage.Format_RGB888)
+                w, h = qimg.width(), qimg.height()
+                ptr = qimg.bits()
+                ptr.setsize(h * w * 3)
+                arr = np.frombuffer(ptr, np.uint8).reshape((h, w, 3))
+                img_np = arr[..., ::-1]  # RGB->BGR
+            else:
+                # ファイルからロード（RGB->BGR）
+                img_pil = Image.open(self.image_path).convert("RGB")
+                img_np = np.array(img_pil)[..., ::-1]
+            # build_preview_and_svgによる線画プレビュー作成
+            preview_bgr, contours, mask_regions = build_preview_and_svg(img_np)
+            # BGR->RGB (reverse channels without OpenCV, ensure contiguous memory)
+            preview_rgb = np.ascontiguousarray(preview_bgr[..., ::-1])
+            h, w, ch = preview_rgb.shape
+            bytes_per_line = ch * w
+            qimg = QImage(preview_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+            self.preview_label.setPixmap(pixmap)
+        except Exception as e:
+            QMessageBox.critical(self, "線画変換エラー", f"線画への変換に失敗しました: {e}")
     
     def on_color_algo_changed(self, index):
         """減色アルゴリズムが変更されたときの処理"""
