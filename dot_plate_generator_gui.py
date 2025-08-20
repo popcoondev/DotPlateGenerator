@@ -3635,9 +3635,12 @@ class DotPlateApp(QMainWindow):
                 # グリッド座標に変換（ズームを考慮）
                 grid_x = pixel_x // self.zoom_factor
                 grid_y = pixel_y // self.zoom_factor
-                
-                # グリッドサイズの範囲内かチェック
-                if 0 <= grid_x < self.grid_size and 0 <= grid_y < self.grid_size:
+                # グリッド幅と高さを取得
+                grid_w = self.grid_size
+                # 行の数はピクスマップ高さ÷ズーム倍率
+                grid_h = self.pixmap_size[1] // self.zoom_factor if self.zoom_factor else 0
+                # グリッド範囲内かチェック
+                if 0 <= grid_x < grid_w and 0 <= grid_y < grid_h:
                     return (grid_x, grid_y)
                 return None
             
@@ -3716,9 +3719,11 @@ class DotPlateApp(QMainWindow):
                     else:
                         super().keyPressEvent(event)
                         return
-                    # 範囲内にクランプ
+                    # 範囲内にクランプ (幅は grid_size、行数は pixmap_height/zoom)
                     new_x = max(0, min(self.grid_size - 1, x + dx))
-                    new_y = max(0, min(self.grid_size - 1, y + dy))
+                    # Y方向は実際のグリッド行数で制限
+                    grid_h = (self.pixmap_size[1] // self.zoom_factor) if self.zoom_factor else self.grid_size
+                    new_y = max(0, min(grid_h - 1, y + dy))
                     self.last_clicked_pos = (new_x, new_y)
                     # プレビュー更新（ハイライト表示）
                     try:
@@ -3736,7 +3741,7 @@ class DotPlateApp(QMainWindow):
         
         # パラメータ定義
         parameters = [
-            ("Grid Size", 32, 8, 512),  # 512x512までの大きな画像に対応
+            ("Grid Size", 32, 8, 1024),  # 1024x1024までの大きな画像に対応
             ("Dot Size", 2.0, 0.2, 5.0),
             ("Wall Thickness", 0.2, 0.0, 5.0),
             ("Wall Height", 0.4, 0.0, 5.0),
@@ -3828,17 +3833,22 @@ class DotPlateApp(QMainWindow):
         self.param_export_mrpaf_button.clicked.connect(self.export_mrpaf)
         param_layout.addWidget(self.param_export_mrpaf_button)
         param_layout.addWidget(self.param_export_image_button)
+        # SVGエクスポートボタン
+        self.param_export_svg_button = QPushButton("SVGをエクスポート")
+        self.param_export_svg_button.setToolTip("Fusion360用SVGをエクスポートします")
+        self.param_export_svg_button.clicked.connect(self.export_svg)
+        param_layout.addWidget(self.param_export_svg_button)
 
         # レイアウトに追加
         param_layout.addLayout(color_algo_layout)
         param_layout.addLayout(wall_color_layout)
         param_layout.addLayout(transparent_color_layout)
-        # 線画変換ボタン
+        # 線画変換オプション
         lineart_layout = QHBoxLayout()
-        self.lineart_button = QPushButton("線画変換")
-        self.lineart_button.setToolTip("オリジナル画像を線画に変換します")
-        self.lineart_button.clicked.connect(self.convert_to_line_art)
-        lineart_layout.addWidget(self.lineart_button)
+        self.lineart_checkbox = QCheckBox("線画変換")
+        self.lineart_checkbox.setToolTip("線画プレビューを切り替えます")
+        self.lineart_checkbox.stateChanged.connect(self.on_lineart_toggled)
+        lineart_layout.addWidget(self.lineart_checkbox)
         lineart_layout.addStretch()
         param_layout.addLayout(lineart_layout)
         # 「同色内壁省略」オプションはSTL出力モードで切り替えます
@@ -4100,13 +4110,15 @@ class DotPlateApp(QMainWindow):
         preview_layout = QVBoxLayout()
         
         self.preview_scroll = QScrollArea()
-        self.preview_scroll.setWidgetResizable(True)
+        # Disable automatic resizing: keep preview_label at its own size for proper scrolling
+        self.preview_scroll.setWidgetResizable(False)
         self.preview_scroll.setMinimumHeight(400)
         
         # クリック可能なカスタムラベルを使用
         self.preview_label = ClickableLabel("プレビューが表示されます")
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Do not expand label; keep size matching pixmap for correct scrolling
+        self.preview_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         
         # シグナルを接続
         self.preview_label.clicked.connect(self.on_preview_clicked)
@@ -4641,8 +4653,9 @@ class DotPlateApp(QMainWindow):
                     array_x = grid_x + dx
                     array_y = grid_y + dy
                     
-                    # グリッド範囲内かチェック
-                    if 0 <= array_x < self.current_grid_size and 0 <= array_y < self.current_grid_size:
+                # グリッド範囲内かチェック (幅と高さを使用)
+                    h, w = self.pixels_rounded_np.shape[:2]
+                    if 0 <= array_x < w and 0 <= array_y < h:
                         try:
                             # 現在の色と同じなら変更しない
                             current_color = self.pixels_rounded_np[array_y, array_x]
@@ -5302,6 +5315,11 @@ class DotPlateApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "線画変換エラー", f"線画への変換に失敗しました: {e}")
     
+    def on_lineart_toggled(self, state):
+        """Rebuild preview according to line-art checkbox state."""
+        # Simply refresh preview; update_preview will handle line-art mode
+        self.update_preview()
+
     def on_color_algo_changed(self, index):
         """減色アルゴリズムが変更されたときの処理"""
         algo_map = {
@@ -5402,6 +5420,10 @@ class DotPlateApp(QMainWindow):
     
     def update_preview(self, custom_pixels=None, highlight_color=None):
         """プレビュー画像を更新する（custom_pixelsが指定された場合はそれを使用）"""
+        # If line-art mode is active, delegate to line-art conversion and skip color preview
+        if hasattr(self, 'lineart_checkbox') and self.lineart_checkbox.isChecked():
+            self.convert_to_line_art()
+            return
         # If pixel data (edited) already exists and no explicit custom_pixels passed,
         # reuse existing pixels to avoid resetting on parameter changes
         if custom_pixels is None and hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
@@ -6830,6 +6852,46 @@ class DotPlateApp(QMainWindow):
             QMessageBox.information(self, "保存完了", f"{path} にMRPAFファイルを保存しました。")
         except Exception as e:
             QMessageBox.critical(self, "MRPAF保存エラー", f"保存中にエラーが発生しました: {e}")
+    def export_svg(self):
+        """Fusion360用SVGをエクスポート"""
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            QMessageBox.warning(self, "SVG出力エラー", "先にプレビューを生成してください。")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "SVGを保存", "output.svg", "SVGファイル (*.svg)")
+        if not path:
+            return
+        import numpy as np
+        pixels = self.pixels_rounded_np
+        # ドットサイズ（mm）
+        try:
+            dot_size = float(self.controls["Dot Size"].value())
+        except Exception:
+            dot_size = 1.0
+        h, w, _ = pixels.shape
+        # 透過色判定用
+        tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
+        # SVGヘッダー
+        svg = []
+        svg.append('<?xml version="1.0" encoding="UTF-8"?>')
+        svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w * dot_size}mm" height="{h * dot_size}mm" viewBox="0 0 {w * dot_size} {h * dot_size}">')
+        # 各ピクセルを矩形として出力
+        for y in range(h):
+            for x in range(w):
+                pix = tuple(int(c) for c in pixels[y, x])
+                if pix == tc:
+                    continue
+                hexcol = f'#{pix[0]:02X}{pix[1]:02X}{pix[2]:02X}'
+                x0 = x * dot_size
+                y0 = y * dot_size
+                svg.append(f'  <rect x="{x0:.3f}" y="{y0:.3f}" width="{dot_size:.3f}" height="{dot_size:.3f}" fill="{hexcol}" stroke="none"/>')
+        svg.append('</svg>')
+        # ファイルへ書き出し
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(svg))
+            QMessageBox.information(self, "SVG出力完了", f"{path} にSVGを保存しました")
+        except Exception as e:
+            QMessageBox.critical(self, "SVG保存エラー", f"保存中にエラーが発生しました: {e}")
     def show_stl_preview(self, mesh):
         """メインウィンドウにSTLプレビューを表示し、別スレッドで画像も保存"""
         try:
@@ -7443,6 +7505,66 @@ class DotPlateApp(QMainWindow):
 # -------------------------------
 # 実行エントリポイント
 # -------------------------------
+    def export_fusion360_script(self):
+        """Fusion360用スケッチ作成スクリプトを出力"""
+        # プレビューが生成されているかチェック
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            QMessageBox.warning(self, "スクリプト出力エラー", "先にプレビューを生成してください。")
+            return
+        # 保存先選択
+        path, _ = QFileDialog.getSaveFileName(self, "Fusion360スクリプトを保存", "fusion360_script.py", "Pythonファイル (*.py)")
+        if not path:
+            return
+        # グリッドサイズ取得
+        try:
+            grid_size = self.controls["Grid Size"].value()
+        except Exception:
+            grid_size = getattr(self, 'current_grid_size', 1)
+        import cv2
+        import numpy as np
+        layers = []
+        # 各レイヤー色に対して輪郭抽出
+        for color in getattr(self, 'layer_color_order', []):
+            mask = (np.all(self.pixels_rounded_np == color, axis=2).astype(np.uint8) * 255)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            pts_list = []
+            for cnt in contours:
+                pts = cnt.reshape(-1, 2)
+                # スケール適用
+                scaled = [(float(x) * grid_size, float(y) * grid_size) for x, y in pts]
+                if len(scaled) >= 2:
+                    pts_list.append(scaled)
+            if pts_list:
+                layers.append((color, pts_list))
+        # スクリプト生成
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write("import adsk.core, adsk.fusion, adsk.cam, traceback\n\n")
+                f.write("def run(context):\n")
+                f.write("    ui = None\n")
+                f.write("    try:\n")
+                f.write("        app = adsk.core.Application.get()\n")
+                f.write("        ui = app.userInterface\n")
+                f.write("        design = adsk.fusion.Design.cast(app.activeProduct)\n")
+                f.write("        root = design.rootComponent\n")
+                f.write("        sketches = root.sketches\n")
+                f.write("        plane = root.xYConstructionPlane\n")
+                for idx, (color, contours) in enumerate(layers):
+                    f.write(f"        # Layer {idx}: color RGB{color}\n")
+                    f.write("        sk = sketches.add(plane)\n")
+                    f.write("        lines = sk.sketchCurves.sketchLines\n")
+                    for pts in contours:
+                        for i in range(len(pts)):
+                            x1, y1 = pts[i]
+                            x2, y2 = pts[(i+1) % len(pts)]
+                            f.write(f"        lines.addByTwoPoints(adsk.core.Point3D.create({x1}, {y1}, 0), adsk.core.Point3D.create({x2}, {y2}, 0))\n")
+                f.write("    except:\n")
+                f.write("        if ui:\n")
+                f.write("            ui.messageBox('Fusion360スクリプト実行中にエラーが発生しました')\n")
+        except Exception as e:
+            QMessageBox.critical(self, "スクリプト出力エラー", f"ファイル書き込み中にエラーが発生しました: {e}")
+            return
+        QMessageBox.information(self, "完了", f"Fusion360スクリプトを {path} に保存しました")
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = DotPlateApp()
