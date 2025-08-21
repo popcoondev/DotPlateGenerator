@@ -6877,52 +6877,33 @@ class DotPlateApp(QMainWindow):
         # 出力モード判定: 1=同色内壁省略 (領域結合)、それ以外はピクセル毎矩形
         mode = getattr(self, 'stl_mode', 0)
         # SVG出力の描画
-        # ベースピクセルを矩形で描画
-        for y in range(h):
-            for x in range(w):
-                pix = tuple(int(c) for c in pixels[y, x])
-                if pix == tc:
-                    continue
-                hexcol = f'#{pix[0]:02X}{pix[1]:02X}{pix[2]:02X}'
-                x0 = x * dot_size
-                y0 = y * dot_size
-                svg.append(f'  <rect x="{x0:.3f}" y="{y0:.3f}" width="{dot_size:.3f}" height="{dot_size:.3f}" fill="{hexcol}" stroke="none"/>')
-        # 同色内壁省略モードでは壁を矩形で描画
+        # 同色内壁省略モード (stl_mode == 1) は領域単位で輪郭パスを生成
         if mode == 1:
-            # パラメータ取得
-            params = {k: spin.value() for k, spin in self.controls.items()}
-            wt = float(params.get("Wall Thickness", 0.0))
-            # 壁色
-            if isinstance(self.wall_color, QColor):
-                wc = (self.wall_color.red(), self.wall_color.green(), self.wall_color.blue())
-            else:
-                wc = tuple(self.wall_color)
-            hex_wall = f'#{wc[0]:02X}{wc[1]:02X}{wc[2]:02X}'
-            # 各ピクセルの境界をチェック
+            import cv2
+            # 各色領域を抽出し、外周輪郭をSVGパスで描画
+            for color in getattr(self, 'layer_color_order', []):
+                if color == tc:
+                    continue
+                # マスク作成 (同色ピクセル)
+                mask = (np.all(pixels == color, axis=2).astype(np.uint8) * 255)
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                hexcol = f'#{color[0]:02X}{color[1]:02X}{color[2]:02X}'
+                for cnt in contours:
+                    pts = cnt.reshape(-1, 2)
+                    # パス座標作成
+                    d = 'M ' + ' L '.join(f"{x * dot_size:.3f},{y * dot_size:.3f}" for x, y in pts) + ' Z'
+                    svg.append(f'  <path d="{d}" fill="{hexcol}" stroke="none"/>')
+        else:
+            # 通常モード: 各ピクセルを個別矩形で描画
             for y in range(h):
                 for x in range(w):
-                    if tuple(pixels[y, x]) == tc:
+                    pix = tuple(int(c) for c in pixels[y, x])
+                    if pix == tc:
                         continue
-                    # 右壁
-                    if x == w-1 or tuple(pixels[y, x+1]) != tuple(pixels[y, x]):
-                        xw = (x+1) * dot_size
-                        yw = y * dot_size
-                        svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{wt:.3f}" height="{dot_size:.3f}" fill="{hex_wall}" stroke="none"/>')
-                    # 下壁
-                    if y == h-1 or tuple(pixels[y+1, x]) != tuple(pixels[y, x]):
-                        xw = x * dot_size
-                        yw = (y+1) * dot_size
-                        svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{dot_size:.3f}" height="{wt:.3f}" fill="{hex_wall}" stroke="none"/>')
-                    # 左壁
-                    if x == 0:
-                        xw = 0
-                        yw = y * dot_size
-                        svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{wt:.3f}" height="{dot_size:.3f}" fill="{hex_wall}" stroke="none"/>')
-                    # 上壁
-                    if y == 0:
-                        xw = x * dot_size
-                        yw = 0
-                        svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{dot_size:.3f}" height="{wt:.3f}" fill="{hex_wall}" stroke="none"/>')
+                    hexcol = f'#{pix[0]:02X}{pix[1]:02X}{pix[2]:02X}'
+                    x0 = x * dot_size
+                    y0 = y * dot_size
+                    svg.append(f'  <rect x="{x0:.3f}" y="{y0:.3f}" width="{dot_size:.3f}" height="{dot_size:.3f}" fill="{hexcol}" stroke="none"/>')
         svg.append('</svg>')
         # ファイルへ書き出し
         try:
