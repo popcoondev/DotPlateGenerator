@@ -6877,8 +6877,9 @@ class DotPlateApp(QMainWindow):
         # 出力モード判定: 1=同色内壁省略 (領域結合)、それ以外はピクセル毎矩形
         mode = getattr(self, 'stl_mode', 0)
         # SVG出力の描画
-        # 通常モード: ベースピクセルを矩形で描画（塗りつぶしのみ、境界線なし）
+        # SVG出力：モード別に描画方式を切り替え
         if mode != 1:
+            # 通常モード: 各ピクセルを矩形で塗りつぶし
             for y in range(h):
                 for x in range(w):
                     pix = tuple(int(c) for c in pixels[y, x])
@@ -6888,8 +6889,19 @@ class DotPlateApp(QMainWindow):
                     x0 = x * dot_size
                     y0 = y * dot_size
                     svg.append(f'  <rect x="{x0:.3f}" y="{y0:.3f}" width="{dot_size:.3f}" height="{dot_size:.3f}" fill="{hexcol}" stroke="none"/>')
-        # 同色内壁省略モードでは、異色境界のみを矩形で描画（壁色）
-        if mode == 1:
+        else:
+            # 同色内壁省略モード: 領域単位で外周輪郭を塗りつぶし
+            import cv2
+            for color in getattr(self, 'layer_color_order', []):
+                if color == tc:
+                    continue
+                mask = (np.all(pixels == color, axis=2).astype(np.uint8) * 255)
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                hexcol = f'#{color[0]:02X}{color[1]:02X}{color[2]:02X}'
+                for cnt in contours:
+                    pts = cnt.reshape(-1, 2)
+                    d = 'M ' + ' L '.join(f"{x * dot_size:.3f},{y * dot_size:.3f}" for x, y in pts) + ' Z'
+                    svg.append(f'  <path d="{d}" fill="{hexcol}" stroke="none"/>')
             params = {k: spin.value() for k, spin in self.controls.items()}
             wt = float(params.get("Wall Thickness", 0.0))
             # 壁の色
