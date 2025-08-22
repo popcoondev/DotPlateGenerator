@@ -6877,16 +6877,17 @@ class DotPlateApp(QMainWindow):
         # 出力モード判定: 1=同色内壁省略 (領域結合)、それ以外はピクセル毎矩形
         mode = getattr(self, 'stl_mode', 0)
         # SVG出力の描画
-        # ベースピクセルを矩形で描画（塗りつぶしのみ、境界線なし）
-        for y in range(h):
-            for x in range(w):
-                pix = tuple(int(c) for c in pixels[y, x])
-                if pix == tc:
-                    continue
-                hexcol = f'#{pix[0]:02X}{pix[1]:02X}{pix[2]:02X}'
-                x0 = x * dot_size
-                y0 = y * dot_size
-                svg.append(f'  <rect x="{x0:.3f}" y="{y0:.3f}" width="{dot_size:.3f}" height="{dot_size:.3f}" fill="{hexcol}" stroke="none"/>')
+        # 通常モード: ベースピクセルを矩形で描画（塗りつぶしのみ、境界線なし）
+        if mode != 1:
+            for y in range(h):
+                for x in range(w):
+                    pix = tuple(int(c) for c in pixels[y, x])
+                    if pix == tc:
+                        continue
+                    hexcol = f'#{pix[0]:02X}{pix[1]:02X}{pix[2]:02X}'
+                    x0 = x * dot_size
+                    y0 = y * dot_size
+                    svg.append(f'  <rect x="{x0:.3f}" y="{y0:.3f}" width="{dot_size:.3f}" height="{dot_size:.3f}" fill="{hexcol}" stroke="none"/>')
         # 同色内壁省略モードでは、異色境界のみを矩形で描画（壁色）
         if mode == 1:
             params = {k: spin.value() for k, spin in self.controls.items()}
