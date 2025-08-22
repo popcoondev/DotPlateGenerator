@@ -6878,7 +6878,8 @@ class DotPlateApp(QMainWindow):
         mode = getattr(self, 'stl_mode', 0)
         # SVG出力の描画
         # SVG出力：モード別に描画方式を切り替え
-        if mode != 1:
+        # 通常モードはmode not in (1,7)、モード1または7で領域単位描画
+        if mode not in (1, 7):
             # 通常モード: 各ピクセルを矩形で塗りつぶし
             for y in range(h):
                 for x in range(w):
@@ -6889,8 +6890,8 @@ class DotPlateApp(QMainWindow):
                     x0 = x * dot_size
                     y0 = y * dot_size
                     svg.append(f'  <rect x="{x0:.3f}" y="{y0:.3f}" width="{dot_size:.3f}" height="{dot_size:.3f}" fill="{hexcol}" stroke="none"/>')
-        else:
-            # 同色内壁省略モード: 領域単位で外周輪郭を塗りつぶし
+        elif mode in (1, 7):
+            # 同色内壁省略／ハイブリッドモード: 領域単位で外周輪郭を塗りつぶし
             import cv2
             for color in getattr(self, 'layer_color_order', []):
                 if color == tc:
