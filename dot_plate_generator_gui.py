@@ -6898,30 +6898,35 @@ class DotPlateApp(QMainWindow):
             else:
                 wc = tuple(self.wall_color)
             hex_wall = f'#{wc[0]:02X}{wc[1]:02X}{wc[2]:02X}'
-            # 隣接ピクセル間で色が異なる辺のみを壁として描画
+            # 隣接ピクセル間で色が異なる辺のみを壁として描画 (透過/境界も含む)
             for y in range(h):
                 for x in range(w):
-                    if tuple(pixels[y, x]) == tc:
+                    color_here = tuple(pixels[y, x])
+                    if color_here == tc:
                         continue
                     # 右の壁
-                    if x == w-1 or tuple(pixels[y, x+1]) != tuple(pixels[y, x]):
+                    right = tuple(pixels[y, x+1]) if x < w-1 else tc
+                    if right != color_here:
                         xw = (x+1) * dot_size
                         yw = y * dot_size
                         svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{wt:.3f}" height="{dot_size:.3f}" fill="{hex_wall}" stroke="none"/>')
                     # 下の壁
-                    if y == h-1 or tuple(pixels[y+1, x]) != tuple(pixels[y, x]):
+                    down = tuple(pixels[y+1, x]) if y < h-1 else tc
+                    if down != color_here:
                         xw = x * dot_size
                         yw = (y+1) * dot_size
                         svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{dot_size:.3f}" height="{wt:.3f}" fill="{hex_wall}" stroke="none"/>')
-                    # 左端壁
-                    if x == 0:
-                        xw = 0
+                    # 左の壁
+                    left = tuple(pixels[y, x-1]) if x > 0 else tc
+                    if left != color_here:
+                        xw = x * dot_size
                         yw = y * dot_size
                         svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{wt:.3f}" height="{dot_size:.3f}" fill="{hex_wall}" stroke="none"/>')
-                    # 上端壁
-                    if y == 0:
+                    # 上の壁
+                    up = tuple(pixels[y-1, x]) if y > 0 else tc
+                    if up != color_here:
                         xw = x * dot_size
-                        yw = 0
+                        yw = y * dot_size
                         svg.append(f'  <rect x="{xw:.3f}" y="{yw:.3f}" width="{dot_size:.3f}" height="{wt:.3f}" fill="{hex_wall}" stroke="none"/>')
         svg.append('</svg>')
         # ファイルへ書き出し
