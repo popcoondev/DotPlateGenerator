@@ -490,10 +490,18 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
     img_rgba = np.zeros((pixels_array.shape[0], pixels_array.shape[1], 4), dtype=np.uint8)
     img_rgba[:, :, :3] = pixels_array  # RGB値をコピー
     
-    # 黒色（0,0,0）のピクセルを透明に設定
-    black_mask = (pixels_array[:, :, 0] == 0) & (pixels_array[:, :, 1] == 0) & (pixels_array[:, :, 2] == 0)
-    img_rgba[black_mask, 3] = 0  # 透明に設定
-    img_rgba[~black_mask, 3] = 255  # 非透明に設定
+    # 透過色設定（ユーザー設定を優先）
+    from PyQt5.QtCore import QSettings
+    settings = QSettings("DotPlateGenerator", "DotPlateApp")
+    hex_tc = settings.value("transparent_color", "#000000")
+    # クオテーションを除去
+    if isinstance(hex_tc, str) and hex_tc.startswith('#') and len(hex_tc) >= 7:
+        tc = (int(hex_tc[1:3], 16), int(hex_tc[3:5], 16), int(hex_tc[5:7], 16))
+    else:
+        tc = (0, 0, 0)
+    mask_tc = (pixels_array[:, :, 0] == tc[0]) & (pixels_array[:, :, 1] == tc[1]) & (pixels_array[:, :, 2] == tc[2])
+    img_rgba[mask_tc, 3] = 0  # 透過色を透明に設定
+    img_rgba[~mask_tc, 3] = 255  # それ以外は不透明
     
     # RGBA画像を作成
     img_preview = Image.fromarray(img_rgba, mode="RGBA")
