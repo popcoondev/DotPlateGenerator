@@ -6785,9 +6785,32 @@ class DotPlateApp(QMainWindow):
                 zoom_factor=cell_px,
                 custom_pixels=custom if custom is not None else self.pixels_rounded_np
             )
-            # 保存
-            # 保存時にDPIを埋め込む
-            img.save(path, dpi=(dpi, dpi))
+            # ここでSTLの外周相当の余白（out_thickness と wall_thickness）を画像に反映
+            try:
+                out_thickness_mm = float(params.get("Out Thickness", 0.0))
+            except Exception:
+                out_thickness_mm = 0.0
+            try:
+                wall_thickness_mm = float(params.get("Wall Thickness", 0.0))
+            except Exception:
+                wall_thickness_mm = 0.0
+            # 外周で一般的に追加される余白(mm)の見積もり
+            extra_mm = 2.0 * (out_thickness_mm + wall_thickness_mm)
+            extra_px = int(round(extra_mm * px_per_mm))
+            # pad を左右上下に分配
+            pad_left = extra_px // 2
+            pad_top = extra_px // 2
+            pad_right = extra_px - pad_left
+            pad_bottom = extra_px - pad_top
+            # 新しいキャンバスを作り、中央にプレビューを貼る
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            final_w = img.width + pad_left + pad_right
+            final_h = img.height + pad_top + pad_bottom
+            canvas = Image.new('RGBA', (final_w, final_h), (255, 255, 255, 0))
+            canvas.paste(img, (pad_left, pad_top), img)
+            # 保存（DPI埋め込み）
+            canvas.save(path, dpi=(dpi, dpi))
             self.input_label.setText(f"{path} にプレビュー画像を保存しました")
         except Exception as e:
             QMessageBox.critical(self, "プレビュー画像保存エラー", f"画像保存中にエラーが発生しました: {e}")
