@@ -506,26 +506,12 @@ def generate_preview_image(image_path, grid_size, color_step, top_color_limit, z
     # RGBA画像を作成
     img_preview = Image.fromarray(img_rgba, mode="RGBA")
     
-    # 透明部分が見えるように市松模様の背景を作成
     from PIL import ImageDraw
     width_px = grid_w * zoom_factor
     height_px = grid_h * zoom_factor
-    checkerboard = Image.new('RGBA', (width_px, height_px), (255, 255, 255, 255))
-    pattern = Image.new('RGBA', (zoom_factor * 2, zoom_factor * 2), (255, 255, 255, 0))
-    draw = ImageDraw.Draw(pattern)
-    draw.rectangle((0, 0, zoom_factor, zoom_factor), fill=(200, 200, 200, 255))
-    draw.rectangle((zoom_factor, zoom_factor, zoom_factor * 2, zoom_factor * 2), fill=(200, 200, 200, 255))
-    
-    # 市松模様パターンを繰り返し配置
-    for y in range(0, height_px, zoom_factor * 2):
-        for x in range(0, width_px, zoom_factor * 2):
-            checkerboard.paste(pattern, (x, y), pattern)
-    
-    # 拡大したプレビュー画像
-    img_preview = img_preview.resize((width_px, height_px), resample=Image.NEAREST)
-    
-    # 市松模様の背景と合成
-    result = Image.alpha_composite(checkerboard, img_preview)
+
+    # 拡大したプレビュー画像 (RGBA)
+    result = img_preview.resize((width_px, height_px), resample=Image.NEAREST)
     
     # 共通の枠線描画関数
     def draw_grid_highlight(grid_pos, color, width_factor=10):
@@ -4398,10 +4384,13 @@ class DotPlateApp(QMainWindow):
         if color.isValid():
             self.transparent_color = color
             self.set_button_color(self.transparent_color_button, color)
-            # 透明ペイントボタンのツールチップを更新
-            tc = self.transparent_color
+            # 設定を永続化
+            settings = QSettings("DotPlateGenerator", "DotPlateApp")
+            hexc = f"#{color.red():02X}{color.green():02X}{color.blue():02X}"
+            settings.setValue("transparent_color", hexc)
+            # 透明ペイントモードのツールチップ更新
             if hasattr(self, 'transparent_btn'):
-                self.transparent_btn.setToolTip(f"透明モード: RGB({tc.red()},{tc.green()},{tc.blue()}) で描画")
+                self.transparent_btn.setToolTip(f"透明モード: {hexc}")
             # プレビュー更新
             self.update_preview()
             
