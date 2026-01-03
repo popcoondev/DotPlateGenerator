@@ -6753,13 +6753,37 @@ class DotPlateApp(QMainWindow):
         cell_px = max(1, int(round(dot_size_mm * px_per_mm)))
         # プレビュー画像生成 (checkerboard背景込み)
         try:
+            # custom_pixels が指定されている場合、保存時は必ず指定された grid_size に合わせる
+            # （STL生成時の grid_size と同一のドット数で出力するため）
+            custom = None
+            if hasattr(self, 'pixels_rounded_np') and self.pixels_rounded_np is not None:
+                arr = self.pixels_rounded_np
+                # 期待される形状: (grid_size, grid_size, 3)
+                if arr.shape[0] != grid_size or arr.shape[1] != grid_size:
+                    # リサイズしてグリッド単位に合わせる（Nearest Neighbor）
+                    from PIL import Image as _Image
+                    tmp_img = _Image.fromarray(arr, mode='RGB')
+                    tmp_img = tmp_img.resize((grid_size, grid_size), resample=_Image.NEAREST)
+                    custom = np.array(tmp_img)
+                else:
+                    custom = arr
+            else:
+                # pixels_rounded_np が無ければ元画像を grid_size x grid_size に縮小して使用
+                try:
+                    from PIL import Image as _Image
+                    orig = _Image.open(self.image_path).convert('RGB')
+                    tmp_img = orig.resize((grid_size, grid_size), resample=_Image.NEAREST)
+                    custom = np.array(tmp_img)
+                except Exception:
+                    custom = None
+
             img = generate_preview_image(
                 self.image_path,
                 grid_size,
                 int(params.get("Color Step", 1)),
                 int(params.get("Top Colors", 256)),
                 zoom_factor=cell_px,
-                custom_pixels=self.pixels_rounded_np
+                custom_pixels=custom if custom is not None else self.pixels_rounded_np
             )
             # 保存
             # 保存時にDPIを埋め込む
