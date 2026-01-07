@@ -3581,6 +3581,8 @@ class DotPlateApp(QMainWindow):
         self.is_paint_mode = True      # ペイントモード（True）または選択モード（False）
         self.is_bucket_mode = False    # 塗りつぶしモード
         self.brush_size = 1            # デフォルトのブラシサイズ
+        # 縁取り選択モードフラグ
+        self.awaiting_region_outline = False
         
         # 減色アルゴリズム用変数
         self.current_color_algo = "simple"  # デフォルトアルゴリズム
@@ -4110,6 +4112,20 @@ class DotPlateApp(QMainWindow):
         row_toolbar.addSpacing(10)
         row_toolbar.addLayout(brush_size_toolbar)
         paint_tools_layout.addLayout(row_toolbar)
+        # 縁取り（領域選択後に適用）ボタンと近傍選択ラジオ
+        outline_panel = QHBoxLayout()
+        self.region_outline_btn = QPushButton("縁取り(対象クリック)")
+        self.region_outline_btn.setToolTip("このボタンを押した後、対象ピクセルを1回クリックすると領域外側を縁取りします")
+        self.region_outline_btn.clicked.connect(lambda: self.start_region_outline_mode())
+        outline_panel.addWidget(self.region_outline_btn)
+        # 近傍ラジオ (4 or 8)
+        self.neigh4_radio = QRadioButton("4近傍")
+        self.neigh8_radio = QRadioButton("8近傍")
+        self.neigh8_radio.setChecked(True)
+        outline_panel.addWidget(QLabel("近傍:"))
+        outline_panel.addWidget(self.neigh8_radio)
+        outline_panel.addWidget(self.neigh4_radio)
+        paint_tools_layout.addLayout(outline_panel)
         # 履歴行
         paint_tools_layout.addLayout(history_toolbar)
         self.paint_tools_group.setLayout(paint_tools_layout)
@@ -4736,6 +4752,97 @@ class DotPlateApp(QMainWindow):
         
         # プレビューを更新
         self.update_preview(custom_pixels=self.pixels_rounded_np)
+
+    def start_region_outline_mode(self):
+        """Enable region-outline awaiting mode: next preview click triggers outline on that region."""
+        if not hasattr(self, 'pixels_rounded_np') or self.pixels_rounded_np is None:
+            QMessageBox.warning(self, "エラー", "先にプレビューを生成してください。")
+            return
+        self.awaiting_region_outline = True
+        self.statusBar().showMessage("縁取りモード: 対象ピクセルをクリックしてください")
+
+    def region_outline_at(self, grid_x, grid_y):
+        """Perform region-based outline starting from clicked pixel.
+        Uses current_paint_color and brush_size for outline color/thickness.
+        """
+        if self.pixels_rounded_np is None:
+            return
+        arr = self.pixels_rounded_np
+        h, w = arr.shape[:2]
+        if not (0 <= grid_x < w and 0 <= grid_y < h):
+            return
+
+        tc = (self.transparent_color.red(), self.transparent_color.green(), self.transparent_color.blue())
+        transparent = ((arr[:, :, 0] == tc[0]) & (arr[:, :, 1] == tc[1]) & (arr[:, :, 2] == tc[2]))
+
+        src_color = tuple(arr[grid_y, grid_x])
+        if src_color == tc:
+            self.statusBar().showMessage("選択ピクセルは透過色です。処理を中止します")
+            return
+
+        # connectivity neighbor selection
+        neighbor = 8 if getattr(self, 'neigh8_radio', None) and self.neigh8_radio.isChecked() else 4
+        if neighbor == 8:
+            offsets = [(-1,-1),(0,-1),(1,-1),(-1,0),(1,0),(-1,1),(0,1),(1,1)]
+        else:
+            offsets = [(0,-1),(-1,0),(1,0),(0,1)]
+
+        # BFS to find connected region of same color
+        from collections import deque
+        visited = [[False]*w for _ in range(h)]
+        q = deque()
+        q.append((grid_x, grid_y))
+        visited[grid_y][grid_x] = True
+        region = []
+        while q:
+            x,y = q.popleft()
+            region.append((x,y))
+            for dx,dy in offsets:
+                nx, ny = x+dx, y+dy
+                if 0 <= nx < w and 0 <= ny < h and not visited[ny][nx]:
+                    if tuple(arr[ny, nx]) == src_color:
+                        visited[ny][nx] = True
+                        q.append((nx, ny))
+
+        # find transparent neighbor pixels around region
+        border = [[False]*w for _ in range(h)]
+        for (x,y) in region:
+            for dx,dy in offsets:
+                nx, ny = x+dx, y+dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    if transparent[ny, nx]:
+                        border[ny][nx] = True
+
+        # expand border by brush_size - 1
+        thickness = int(getattr(self, 'brush_size', 1))
+        if thickness > 1:
+            import copy
+            for _ in range(thickness-1):
+                new_border = copy.deepcopy(border)
+                for y in range(h):
+                    for x in range(w):
+                        if border[y][x]:
+                            for dx,dy in offsets:
+                                nx, ny = x+dx, y+dy
+                                if 0 <= nx < w and 0 <= ny < h and transparent[ny, nx] and not new_border[ny][nx]:
+                                    new_border[ny][nx] = True
+                border = new_border
+
+        # apply outline color to transparent border pixels
+        outline_color = (self.current_paint_color.red(), self.current_paint_color.green(), self.current_paint_color.blue())
+        self.save_edit_history()
+        changed = False
+        for y in range(h):
+            for x in range(w):
+                if border[y][x] and transparent[y, x]:
+                    arr[y,x] = outline_color
+                    changed = True
+
+        if changed:
+            self.update_preview(custom_pixels=arr)
+            self.statusBar().showMessage("縁取りを適用しました")
+        else:
+            self.statusBar().showMessage("縁取り対象が見つかりませんでした")
     
     def on_preview_drag_paint(self, grid_x, grid_y):
         """ドラッグ中のペイント処理"""
@@ -4750,6 +4857,16 @@ class DotPlateApp(QMainWindow):
     
     def on_preview_clicked(self, grid_x, grid_y):
         """減色後のプレビュー画像内のドットがクリックされたときの処理"""
+        # If region-outline mode awaiting a click, handle here
+        if getattr(self, 'awaiting_region_outline', False):
+            # clear awaiting flag
+            self.awaiting_region_outline = False
+            try:
+                self.region_outline_at(grid_x, grid_y)
+            except Exception as e:
+                print(f"region outline error: {e}")
+            # consume click for outline and do not perform usual click behavior
+            return
         if self.pixels_rounded_np is None:
             return
         # AIブラシモードの場合は専用処理
