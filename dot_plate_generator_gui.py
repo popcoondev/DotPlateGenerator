@@ -3604,6 +3604,7 @@ class DotPlateApp(QMainWindow):
                 self.setMouseTracking(True)   # マウスの移動を追跡
                 self.is_dragging = False      # ドラッグ状態の追跡
                 self.setFocusPolicy(Qt.StrongFocus)  # キーボードフォーカスを受け取れるように
+                self.space_down = False
             
             def get_grid_position(self, pos):
                 """マウス位置からグリッド位置を計算する共通関数"""
@@ -3691,8 +3692,9 @@ class DotPlateApp(QMainWindow):
                 """Spaceでペイント、Shift+矢印キーでカーソル移動"""
                 # Spaceキーで現在のカーソル位置にペイント
                 if event.key() == Qt.Key_Space:
+                    # Space 押下時は即座にその位置を塗る（従来挙動）
+                    self.space_down = True
                     if self.last_clicked_pos is not None:
-                        # クリック相当の動作を発火
                         self.clicked.emit(self.last_clicked_pos[0], self.last_clicked_pos[1])
                     event.accept()
                     return
@@ -3722,11 +3724,25 @@ class DotPlateApp(QMainWindow):
                     # プレビュー更新（ハイライト表示）
                     try:
                         self.window().update_preview()
+                        # Shift+矢印で移動したときに Space が押されていれば、その位置を1回塗る
+                        if getattr(self, 'space_down', False):
+                            try:
+                                self.clicked.emit(new_x, new_y)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     event.accept()
                     return
                 super().keyPressEvent(event)
+
+            def keyReleaseEvent(self, event):
+                # Space の離上を検出してフラグ解除
+                if event.key() == Qt.Key_Space:
+                    self.space_down = False
+                    event.accept()
+                    return
+                super().keyReleaseEvent(event)
                 
         # パラメータのグリッドレイアウト
         self.param_grid = QGridLayout()
