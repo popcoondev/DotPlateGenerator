@@ -4805,14 +4805,20 @@ class DotPlateApp(QMainWindow):
                         visited[ny][nx] = True
                         q.append((nx, ny))
 
-        # find transparent neighbor pixels around region
+        # For each region pixel, cast rays in each offset direction and pick the first transparent pixel along that ray
         border = [[False]*w for _ in range(h)]
-        for (x,y) in region:
-            for dx,dy in offsets:
-                nx, ny = x+dx, y+dy
-                if 0 <= nx < w and 0 <= ny < h:
+        max_dist = max(w, h)
+        for (x, y) in region:
+            for dx, dy in offsets:
+                nx, ny = x + dx, y + dy
+                dist = 1
+                while 0 <= nx < w and 0 <= ny < h and dist <= max_dist:
                     if transparent[ny, nx]:
                         border[ny][nx] = True
+                        break
+                    nx += dx
+                    ny += dy
+                    dist += 1
 
         # expand border by brush_size - 1
         thickness = int(getattr(self, 'brush_size', 1))
