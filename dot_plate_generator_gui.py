@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QVBoxLayout, QHBoxLayout, QSlider, QSpinBox,
     QGridLayout, QDoubleSpinBox, QToolButton, QDialog, QGroupBox, QFrame,
     QSizePolicy, QToolTip, QMainWindow, QColorDialog, QCheckBox, QComboBox,
+    QRadioButton,
     QMenu, QAction, QMenuBar, QRubberBand, QAbstractItemView, QDockWidget,
     QDialogButtonBox, QTextBrowser
 )
